@@ -459,7 +459,8 @@ class TrafficHeatmap(Static):
         header = Text()
         header.append("From↓ To→         ", style="bold")  # Space for full row labels
         for node in self.node_names:
-            header.append(f"{short(node):>7}", style="bold")
+            # Abbreviate to 5 chars, right-aligned in 7-char cell
+            header.append(f"{short(node)[:5]:>7}", style="bold")
         lines.append(header)
 
         # Data rows (3 lines per node for larger square cells)
@@ -480,9 +481,10 @@ class TrafficHeatmap(Static):
             for dst in self.node_names:
                 if src == dst:
                     # Diagonal: pattern (7 chars, 3 lines)
-                    row1.append("‾‾‾‾╲__", style="blue on grey27")
-                    row2.append("___╱‾‾‾", style="blue on grey27")
-                    row3.append("‾‾‾‾‾‾‾", style="blue on grey27")
+                    # Diagonal at (1,3), (2,4), (3,5), unspecified = space
+                    row1.append("‾‾╲    ", style="blue on grey27")
+                    row2.append("   ╲   ", style="blue on grey27")
+                    row3.append("    ╲__", style="blue on grey27")
                 else:
                     tx_rate = matrix.get((src, dst), 0.0)
                     text, style = self._format_cell(tx_rate, max_rate)
