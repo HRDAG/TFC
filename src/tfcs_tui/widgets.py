@@ -359,3 +359,138 @@ class TrafficMatrixTable(DataTable):
             style = "red bold"
 
         return Text(rate_str, style=style, justify="right")
+
+
+# ---------------------------------------------------------------------------
+# Traffic heatmap
+# ---------------------------------------------------------------------------
+
+class TrafficHeatmap(DataTable):
+    """Color-coded traffic intensity heatmap (sender row → receiver col)."""
+
+    DEFAULT_CSS = """
+    TrafficHeatmap {
+        height: auto;
+        max-height: 14;
+        margin-bottom: 1;
+    }
+    """
+
+    def __init__(self, node_names: list[str], ip_map: dict[str, str]) -> None:
+        """
+        Args:
+            node_names: Sorted list of node FQDNs
+            ip_map: {ip: hostname} mapping from tailscale status
+        """
+        super().__init__()
+        self.node_names = sorted(node_names)
+        self.ip_to_node = {ip: host for ip, host in ip_map.items()}
+        self._gradient = self._make_gradient()
+
+    def _make_gradient(self) -> list[tuple[int, int, int]]:
+        """Build gradient: black → blue → cyan → green → yellow → red."""
+        stops = [
+            (0.0,  (0, 0, 0)),
+            (0.15, (0, 0, 180)),
+            (0.3,  (0, 140, 180)),
+            (0.45, (0, 180, 0)),
+            (0.65, (200, 200, 0)),
+            (0.85, (220, 80, 0)),
+            (1.0,  (255, 60, 60)),
+        ]
+        gradient = []
+        n_colors = 64
+        for i in range(n_colors):
+            t = i / (n_colors - 1)
+            # Find surrounding stops
+            for si in range(len(stops) - 1):
+                t0, c0 = stops[si]
+                t1, c1 = stops[si + 1]
+                if t0 <= t <= t1:
+                    frac = (t - t0) / (t1 - t0) if t1 > t0 else 0
+                    r = int(c0[0] + frac * (c1[0] - c0[0]))
+                    g = int(c0[1] + frac * (c1[1] - c0[1]))
+                    b = int(c0[2] + frac * (c1[2] - c0[2]))
+                    gradient.append((r, g, b))
+                    break
+        return gradient
+
+    def on_mount(self) -> None:
+        # Header row: "From↓ To→" + node short names (4 chars)
+        self.add_column("From↓ To→", width=10, key="source")
+        for node in self.node_names:
+            node_abbrev = short(node)[:4]
+            self.add_column(node_abbrev, width=4, key=f"dest_{node}")
+
+        self.cursor_type = "none"
+
+        # Right-align column headers
+        for col_key in self.columns:
+            self.columns[col_key].label_align = ("right", "middle")
+
+    def refresh_data(self, traffic_reports: list[dict]) -> None:
+        """Update heatmap from /traffic poll results.
+
+        Args:
+            traffic_reports: [{\"node_id\": \"scott.hrdag.net\",
+                               \"traffic\": {\"100.64.0.4\": {
+                                   \"tx_rate_bytes_per_sec\": ..., ...}}}]
+        """
+        self.clear()
+
+        # Build traffic matrix: {(src_node, dst_node): tx_rate}
+        matrix = {}
+        max_rate = 1.0  # Track max for scaling
+
+        for report in traffic_reports:
+            src_node = report["node_id"]
+            for peer_ip, stats in report.get("traffic", {}).items():
+                dst_node = self.ip_to_node.get(peer_ip)
+                if dst_node:
+                    tx_rate = stats.get("tx_rate_bytes_per_sec", 0.0)
+                    matrix[(src_node, dst_node)] = tx_rate
+                    if tx_rate > max_rate:
+                        max_rate = tx_rate
+
+        # Render heatmap rows
+        for src in self.node_names:
+            row = [short(src)[:4]]
+
+            for dst in self.node_names:
+                if src == dst:
+                    # Diagonal: pattern
+                    cell = Text("‾╲__", style="blue on grey27", justify="left")
+                else:
+                    tx_rate = matrix.get((src, dst), 0.0)
+                    cell = self._format_cell(tx_rate, max_rate)
+
+                row.append(cell)
+
+            self.add_row(*row)
+
+    def _format_cell(self, bytes_per_sec: float, max_rate: float) -> Text:
+        """Format cell as colored block with log scaling.
+
+        Args:
+            bytes_per_sec: Traffic rate in bytes/sec
+            max_rate: Maximum rate in current dataset for scaling
+        """
+        import math
+
+        if bytes_per_sec < 1:
+            # No traffic
+            return Text("    ", style="on grey11", justify="left")
+
+        # Log scaling as recommended in heatmap.py
+        # Use max_rate as upper bound for scaling
+        t = math.log1p(bytes_per_sec) / math.log1p(max(max_rate, 1.0))
+        t = max(0.0, min(1.0, t))
+
+        # Map to gradient color
+        idx = int(t * (len(self._gradient) - 1))
+        r, g, b = self._gradient[idx]
+
+        # Create colored block (4 chars wide)
+        from rich.color import Color
+        bg_color = Color.from_rgb(r, g, b)
+        return Text("    ", style=f"on rgb({r},{g},{b})", justify="left")

@@ -33,6 +33,7 @@ from tfcs_tui.data import (
 from tfcs_tui.widgets import (
     NodesTable,
     ReplicationChart,
+    TrafficHeatmap,
     TrafficMatrixTable,
     TransfersTable,
 )
@@ -81,6 +82,7 @@ class TfcsDashboard(App):
         Binding("r", "refresh", "Refresh"),
         Binding("1", "tab_overview", "Overview", show=False),
         Binding("2", "tab_traffic", "Traffic", show=False),
+        Binding("3", "tab_heatmap", "Heatmap", show=False),
         Binding("j", "scroll_down", "Down", show=False),
         Binding("k", "scroll_up", "Up", show=False),
     ]
@@ -130,6 +132,8 @@ class TfcsDashboard(App):
                 yield TransfersTable()
             with TabPane("Traffic", id="tab-traffic"):
                 yield TrafficMatrixTable(self._peer_hosts, self._ip_map)
+            with TabPane("Heatmap", id="tab-heatmap"):
+                yield TrafficHeatmap(self._peer_hosts, self._ip_map)
         yield Footer()
 
     def on_mount(self) -> None:
@@ -189,10 +193,10 @@ class TfcsDashboard(App):
         self.query_one(TransfersTable).refresh_data(statuses)
 
     def on_traffic_data(self, message: TrafficData) -> None:
-        """Update traffic matrix with fresh data."""
+        """Update traffic matrix and heatmap with fresh data."""
         reports = message.reports
 
-        # Update title bar (only if on traffic tab)
+        # Update title bar based on active tab
         active_tab = self.query_one(TabbedContent).active
         if active_tab == "tab-traffic":
             n_reporting = len(reports)
@@ -200,9 +204,16 @@ class TfcsDashboard(App):
             title_bar.update(
                 f" tfcs traffic matrix    {n_reporting}/{len(self._peer_hosts)} nodes reporting"
             )
+        elif active_tab == "tab-heatmap":
+            n_reporting = len(reports)
+            title_bar = self.query_one("#title-bar", Static)
+            title_bar.update(
+                f" tfcs traffic heatmap    {n_reporting}/{len(self._peer_hosts)} nodes reporting"
+            )
 
-        # Update traffic matrix
+        # Update both traffic views
         self.query_one(TrafficMatrixTable).refresh_data(reports)
+        self.query_one(TrafficHeatmap).refresh_data(reports)
 
     def action_tab_overview(self) -> None:
         """Switch to overview tab."""
@@ -217,6 +228,13 @@ class TfcsDashboard(App):
         # Update title bar for traffic
         title_bar = self.query_one("#title-bar", Static)
         title_bar.update(" tfcs traffic matrix")
+
+    def action_tab_heatmap(self) -> None:
+        """Switch to heatmap tab."""
+        self.query_one(TabbedContent).active = "tab-heatmap"
+        # Update title bar for heatmap
+        title_bar = self.query_one("#title-bar", Static)
+        title_bar.update(" tfcs traffic heatmap")
 
     def action_scroll_down(self) -> None:
         table = self.query_one(TransfersTable)
