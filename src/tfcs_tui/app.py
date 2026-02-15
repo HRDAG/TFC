@@ -115,6 +115,10 @@ class TfcsDashboard(App):
         self._refresh_seconds = refresh_seconds
         self._mock = mock
 
+        # Rolling traffic updates (one node at a time)
+        self._current_node_index = 0
+        self._traffic_data: dict[str, dict] = {}  # Accumulated traffic reports
+
         # Load IP to hostname mapping from tailscale
         if mock:
             from tfcs_tui.mock import IP_MAP
@@ -139,10 +143,13 @@ class TfcsDashboard(App):
     def on_mount(self) -> None:
         self.action_refresh()
         if not self._mock:
-            self.set_interval(self._refresh_seconds, self.action_refresh)
+            # Cluster data (status, nodes, replication) every N seconds
+            self.set_interval(self._refresh_seconds, self._refresh_cluster)
+            # Traffic data: one node per second (rolling updates)
+            self.set_interval(1.0, self._refresh_traffic_single_node)
 
     def action_refresh(self) -> None:
-        """Poll cluster and traffic (or load mock data) and update widgets."""
+        """Initial refresh on startup (or manual refresh with 'r' key)."""
         if self._mock:
             from tfcs_tui.mock import (
                 HEARTBEAT_AGE,
@@ -154,8 +161,24 @@ class TfcsDashboard(App):
             self.post_message(ClusterData(STATUSES, NODE_STATUS, HEARTBEAT_AGE, REPLICATION))
             self.post_message(TrafficData(TRAFFIC_REPORTS))
         else:
-            self.run_worker(self._poll_cluster, exclusive=False)
-            self.run_worker(self._poll_traffic, exclusive=False)
+            self._refresh_cluster()
+            self._refresh_traffic_single_node()
+
+    def _refresh_cluster(self) -> None:
+        """Poll cluster data (status, nodes, replication)."""
+        self.run_worker(self._poll_cluster, exclusive=False)
+
+    def _refresh_traffic_single_node(self) -> None:
+        """Poll traffic from one node (rolling updates)."""
+        if not self._peer_hosts:
+            return
+
+        # Get next node to poll
+        host = self._peer_hosts[self._current_node_index]
+        self._current_node_index = (self._current_node_index + 1) % len(self._peer_hosts)
+
+        # Spawn worker to fetch from this node
+        self.run_worker(self._poll_traffic_single, host, exclusive=False)
 
     async def _poll_cluster(self) -> None:
         """Background worker: poll cluster endpoints."""
@@ -164,10 +187,21 @@ class TfcsDashboard(App):
         )
         self.post_message(ClusterData(statuses, node_status, heartbeat_age, replication))
 
-    async def _poll_traffic(self) -> None:
-        """Background worker: poll traffic matrix."""
-        reports = await poll_traffic_matrix(self._peer_hosts, self._http_port)
-        self.post_message(TrafficData(reports))
+    async def _poll_traffic_single(self, host: str) -> None:
+        """Background worker: poll traffic from a single node."""
+        from tfcs_tui.data import fetch_node_traffic
+        import aiohttp
+
+        async with aiohttp.ClientSession() as session:
+            report = await fetch_node_traffic(session, host, self._http_port)
+            if report:
+                # Update accumulated data
+                node_id = report["node_id"]
+                self._traffic_data[node_id] = report
+
+                # Post message with all accumulated reports
+                reports = list(self._traffic_data.values())
+                self.post_message(TrafficData(reports))
 
     def on_cluster_data(self, message: ClusterData) -> None:
         """Update all widgets with fresh cluster data."""
