@@ -462,23 +462,30 @@ class TrafficHeatmap(Static):
             header.append(f"{short(node):>4}", style="bold")
         lines.append(header)
 
-        # Data rows
+        # Data rows (2 lines per node for square cells)
         for src in self.node_names:
-            row = Text()
-            # Row label (full length, right-aligned to 17 chars)
-            row.append(f"{short(src):>17} ", style="")
+            # First line of row
+            row1 = Text()
+            row1.append(f"{short(src):>17} ", style="")
 
-            # Cells (4 chars each, touching)
+            # Second line of row (no label, just spacing)
+            row2 = Text()
+            row2.append(" " * 18, style="")
+
+            # Cells (4 chars each, touching, 2 lines tall)
             for dst in self.node_names:
                 if src == dst:
-                    # Diagonal: pattern (4 chars)
-                    row.append("‾‾╲_", style="blue on grey27")
+                    # Diagonal: pattern (4 chars, 2 lines)
+                    row1.append("‾‾╲_", style="blue on grey27")
+                    row2.append("__╱‾", style="blue on grey27")
                 else:
                     tx_rate = matrix.get((src, dst), 0.0)
                     text, style = self._format_cell(tx_rate, max_rate)
-                    row.append(text, style=style)
+                    row1.append(text, style=style)
+                    row2.append(text, style=style)
 
-            lines.append(row)
+            lines.append(row1)
+            lines.append(row2)
 
         # Legend (gradient bar with scale)
         lines.append(Text())  # Blank line
