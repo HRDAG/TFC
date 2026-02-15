@@ -25,6 +25,8 @@ from textual.widgets import Footer, Header, Static, TabbedContent, TabPane
 
 from tfcs_tui.data import (
     DEFAULT_CONFIG,
+    NodeDataStore,
+    fetch_node_all,
     load_config,
     load_tailscale_ip_map,
     poll_cluster,
@@ -43,30 +45,11 @@ from tfcs_tui.widgets import (
 # Messages
 # ---------------------------------------------------------------------------
 
-class ClusterData(Message):
-    """Posted when a poll completes with new cluster data."""
-
-    def __init__(
-        self,
-        statuses: list[dict],
-        node_status: dict[str, str],
-        heartbeat_age: dict[str, float],
-        replication: dict[int, int],
-    ) -> None:
+class NodeUpdated(Message):
+    """Posted when a single node poll completes."""
+    def __init__(self, updated_node: str) -> None:
         super().__init__()
-        self.statuses = statuses
-        self.node_status = node_status
-        self.heartbeat_age = heartbeat_age
-        self.replication = replication
-
-
-class TrafficData(Message):
-    """Posted when traffic matrix poll completes."""
-
-    def __init__(self, reports: list[dict], updated_node: str | None = None) -> None:
-        super().__init__()
-        self.reports = reports
-        self.updated_node = updated_node  # Which node was just polled (for freshness tracking)
+        self.updated_node = updated_node
 
 
 # ---------------------------------------------------------------------------
@@ -115,10 +98,10 @@ class TfcsDashboard(App):
         self._target_copies = target_copies
         self._refresh_seconds = refresh_seconds
         self._mock = mock
+        self._store = NodeDataStore()
 
-        # Rolling traffic updates (one node at a time)
+        # Rolling updates (one node at a time)
         self._current_node_index = 0
-        self._traffic_data: dict[str, dict] = {}  # Accumulated traffic reports
 
         # Load IP to hostname mapping from tailscale
         if mock:
@@ -144,10 +127,7 @@ class TfcsDashboard(App):
     def on_mount(self) -> None:
         self.action_refresh()
         if not self._mock:
-            # Cluster data (status, nodes, replication) every N seconds
-            self.set_interval(self._refresh_seconds, self._refresh_cluster)
-            # Traffic data: one node per second (rolling updates)
-            self.set_interval(1.0, self._refresh_traffic_single_node)
+            self.set_interval(1.0, self._poll_next_node)
 
     def action_refresh(self) -> None:
         """Initial refresh on startup (or manual refresh with 'r' key)."""
@@ -159,121 +139,139 @@ class TfcsDashboard(App):
                 STATUSES,
                 TRAFFIC_REPORTS,
             )
-            self.post_message(ClusterData(STATUSES, NODE_STATUS, HEARTBEAT_AGE, REPLICATION))
-            self.post_message(TrafficData(TRAFFIC_REPORTS))
+            # Populate the datastore
+            for s in STATUSES:
+                self._store.update_node(s["node_id"], status=s, traffic=None)
+            for r in TRAFFIC_REPORTS:
+                self._store.update_node(r["node_id"], status=None, traffic=r)
+            self._store.update_global(NODE_STATUS, HEARTBEAT_AGE, REPLICATION)
+            self.post_message(NodeUpdated(updated_node="mock"))
         else:
-            self._refresh_cluster()
-            self._refresh_traffic_single_node()
+            # Full burst refresh using existing poll functions
+            async def do_full_refresh():
+                statuses, node_status, heartbeat_age, replication = await poll_cluster(
+                    self._peer_hosts, self._http_port, self._target_copies
+                )
+                traffic_reports = await poll_traffic_matrix(
+                    self._peer_hosts, self._http_port
+                )
 
-    def _refresh_cluster(self) -> None:
-        """Poll cluster data (status, nodes, replication)."""
-        self.run_worker(self._poll_cluster, exclusive=False)
+                # Populate datastore
+                for status in statuses:
+                    node_id = status.get("node_id")
+                    if node_id:
+                        self._store.update_node(node_id, status, None)
 
-    def _refresh_traffic_single_node(self) -> None:
-        """Poll traffic from one node (rolling updates)."""
+                for traffic in traffic_reports:
+                    node_id = traffic.get("node_id")
+                    if node_id:
+                        # Merge with existing node or create new
+                        self._store.update_node(node_id, None, traffic)
+
+                self._store.update_global(node_status, heartbeat_age, replication)
+                self.post_message(NodeUpdated(updated_node="refresh"))
+
+            self.run_worker(do_full_refresh, exclusive=False)
+
+    def _poll_next_node(self) -> None:
+        """Poll next node in rolling sequence (1 node per second)."""
         if not self._peer_hosts:
             return
 
-        # Get next node to poll
         host = self._peer_hosts[self._current_node_index]
+        include_global = (self._current_node_index == 0)  # Fetch global data on first node
         self._current_node_index = (self._current_node_index + 1) % len(self._peer_hosts)
 
-        # Spawn worker to fetch from this node
-        async def poll_this_node():
-            await self._poll_traffic_single(host)
+        async def do_poll():
+            await self._do_poll(host, include_global)
 
-        self.run_worker(poll_this_node, exclusive=False)
+        self.run_worker(do_poll, exclusive=False)
 
-    async def _poll_cluster(self) -> None:
-        """Background worker: poll cluster endpoints."""
-        statuses, node_status, heartbeat_age, replication = await poll_cluster(
-            self._peer_hosts, self._http_port, self._target_copies,
-        )
-        self.post_message(ClusterData(statuses, node_status, heartbeat_age, replication))
-
-    async def _poll_traffic_single(self, host: str) -> None:
-        """Background worker: poll traffic from a single node."""
-        from tfcs_tui.data import fetch_node_traffic
+    async def _do_poll(self, host: str, include_global: bool) -> None:
+        """Background worker: poll single node for all endpoints."""
         import aiohttp
 
         async with aiohttp.ClientSession() as session:
-            report = await fetch_node_traffic(session, host, self._http_port)
-            if report:
-                # Update accumulated data
-                node_id = report["node_id"]
-                self._traffic_data[node_id] = report
-
-                # Post message with all accumulated reports + which node is new
-                reports = list(self._traffic_data.values())
-                self.post_message(TrafficData(reports, updated_node=node_id))
-
-    def on_cluster_data(self, message: ClusterData) -> None:
-        """Update all widgets with fresh cluster data."""
-        statuses = message.statuses
-        node_status = message.node_status
-        heartbeat_age = message.heartbeat_age
-        replication = message.replication
-
-        # Update title bar (only if on overview tab)
-        active_tab = self.query_one(TabbedContent).active
-        if active_tab == "tab-overview":
-            n_nodes = len(statuses)
-            title_bar = self.query_one("#title-bar", Static)
-            title_bar.update(
-                f" tfcs cluster dashboard    {n_nodes} nodes"
+            status, traffic, nodes_list, replication = await fetch_node_all(
+                session, host, self._http_port, include_global, self._target_copies
             )
 
-        # Widgets
-        self.query_one(ReplicationChart).refresh_data(
-            replication, self._target_copies,
-        )
-        self.query_one(NodesTable).refresh_data(statuses, node_status, heartbeat_age)
-        self.query_one(TransfersTable).refresh_data(statuses)
+            # Extract node_id from status or traffic
+            node_id = None
+            if status:
+                node_id = status.get("node_id")
+            elif traffic:
+                node_id = traffic.get("node_id")
 
-    def on_traffic_data(self, message: TrafficData) -> None:
-        """Update traffic matrix and heatmap with fresh data."""
-        reports = message.reports
-        updated_node = message.updated_node
+            if not node_id:
+                return
 
-        # Update title bar based on active tab
+            # Update datastore
+            self._store.update_node(node_id, status, traffic)
+
+            if include_global and nodes_list is not None and replication is not None:
+                # Parse nodes_list into node_status and heartbeat_age dicts
+                node_status = {}
+                heartbeat_age = {}
+                for node_info in nodes_list:
+                    nid = node_info.get("node_id")
+                    if nid:
+                        node_status[nid] = node_info.get("status", "unknown")
+                        heartbeat_age[nid] = node_info.get("heartbeat_age_seconds", 0.0)
+
+                self._store.update_global(node_status, heartbeat_age, replication)
+
+            self.post_message(NodeUpdated(updated_node=node_id))
+
+    def on_node_updated(self, message: NodeUpdated) -> None:
+        """Update ALL widgets from the datastore."""
+        store = self._store
+
+        # Overview widgets
+        self.query_one(ReplicationChart).refresh_data(store.replication, self._target_copies)
+        self.query_one(NodesTable).refresh_data(store.statuses, store.node_status, store.heartbeat_age)
+        self.query_one(TransfersTable).refresh_data(store.statuses)
+
+        # Traffic widgets
+        self.query_one(TrafficMatrixTable).refresh_data(store.traffic_reports)
+        self.query_one(TrafficHeatmap).refresh_data(store.traffic_reports, message.updated_node)
+
+        # Update title bar
+        self._update_title_bar()
+
+    def _update_title_bar(self) -> None:
+        """Update title bar based on active tab."""
         active_tab = self.query_one(TabbedContent).active
-        if active_tab == "tab-traffic":
-            n_reporting = len(reports)
-            title_bar = self.query_one("#title-bar", Static)
+        title_bar = self.query_one("#title-bar", Static)
+
+        if active_tab == "tab-overview":
+            n_nodes = len(self._store.statuses)
+            title_bar.update(f" tfcs cluster dashboard    {n_nodes} nodes")
+        elif active_tab == "tab-traffic":
+            n_reporting = len(self._store.traffic_reports)
             title_bar.update(
                 f" tfcs traffic matrix    {n_reporting}/{len(self._peer_hosts)} nodes reporting"
             )
         elif active_tab == "tab-heatmap":
-            n_reporting = len(reports)
-            title_bar = self.query_one("#title-bar", Static)
+            n_reporting = len(self._store.traffic_reports)
             title_bar.update(
                 f" tfcs traffic heatmap    {n_reporting}/{len(self._peer_hosts)} nodes reporting"
             )
 
-        # Update both traffic views
-        self.query_one(TrafficMatrixTable).refresh_data(reports)
-        self.query_one(TrafficHeatmap).refresh_data(reports, updated_node)
-
     def action_tab_overview(self) -> None:
         """Switch to overview tab."""
         self.query_one(TabbedContent).active = "tab-overview"
-        # Update title bar for overview
-        title_bar = self.query_one("#title-bar", Static)
-        title_bar.update(" tfcs cluster dashboard")
+        self._update_title_bar()
 
     def action_tab_traffic(self) -> None:
         """Switch to traffic tab."""
         self.query_one(TabbedContent).active = "tab-traffic"
-        # Update title bar for traffic
-        title_bar = self.query_one("#title-bar", Static)
-        title_bar.update(" tfcs traffic matrix")
+        self._update_title_bar()
 
     def action_tab_heatmap(self) -> None:
         """Switch to heatmap tab."""
         self.query_one(TabbedContent).active = "tab-heatmap"
-        # Update title bar for heatmap
-        title_bar = self.query_one("#title-bar", Static)
-        title_bar.update(" tfcs traffic heatmap")
+        self._update_title_bar()
 
     def action_scroll_down(self) -> None:
         table = self.query_one(TransfersTable)

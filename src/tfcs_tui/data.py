@@ -13,7 +13,9 @@ No tfcs code imports. Pure HTTP client.
 from __future__ import annotations
 
 import asyncio
+import time
 import tomllib
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import aiohttp
@@ -229,6 +231,46 @@ async def poll_traffic_matrix(
         return [r for r in results if r is not None]
 
 
+async def fetch_node_all(
+    session: aiohttp.ClientSession,
+    host: str,
+    http_port: int,
+    include_global: bool = False,
+    target_copies: int = 3,
+) -> tuple[dict | None, dict | None, list[dict] | None, dict[int, int] | None]:
+    """Fetch /status and /traffic from a single node.
+
+    If include_global is True, also fetch /nodes and /replication
+    (these are cluster-wide views, so only needed once per cycle).
+
+    Returns: (status, traffic, nodes_list, replication)
+    """
+    # Always fetch per-node endpoints concurrently
+    status_task = fetch_status(session, host, http_port)
+    traffic_task = fetch_node_traffic(session, host, http_port)
+
+    if include_global:
+        # Fetch global endpoints as well
+        nodes_task = fetch_nodes(session, host, http_port)
+        repl_task = fetch_replication(session, host, http_port, target_copies)
+
+        # Gather all four endpoints concurrently
+        status, traffic, nodes_list, replication = await asyncio.gather(
+            status_task, traffic_task, nodes_task, repl_task,
+            return_exceptions=False,
+        )
+    else:
+        # Only fetch per-node endpoints
+        status, traffic = await asyncio.gather(
+            status_task, traffic_task,
+            return_exceptions=False,
+        )
+        nodes_list = None
+        replication = None
+
+    return status, traffic, nodes_list, replication
+
+
 # ---------------------------------------------------------------------------
 # IP to hostname mapping
 # ---------------------------------------------------------------------------
@@ -275,3 +317,99 @@ def load_tailscale_ip_map(peer_hosts: list[str] | None = None) -> dict[str, str]
                 ip_map[ip] = hostname
 
     return ip_map
+
+
+# ---------------------------------------------------------------------------
+# NodeDataStore
+# ---------------------------------------------------------------------------
+
+@dataclass
+class NodeSnapshot:
+    """All data from a single node's most recent poll."""
+    node_id: str
+    status_response: dict | None = None    # Raw /status JSON
+    traffic_response: dict | None = None   # Raw /traffic JSON
+    node_status: str = "unknown"           # From /nodes endpoint
+    heartbeat_age: float = 0.0             # From /nodes endpoint
+    last_updated: float = 0.0              # time.monotonic() when polled
+
+
+class NodeDataStore:
+    """In-memory accumulator for rolling node polls."""
+
+    def __init__(self) -> None:
+        self._nodes: dict[str, NodeSnapshot] = {}  # node_id -> snapshot
+        self._replication: dict[int, int] = {}      # copies -> count
+        self._node_status: dict[str, str] = {}      # node_id -> alive/suspect/dead
+        self._heartbeat_age: dict[str, float] = {}  # node_id -> seconds
+        self._cycle_count: int = 0                  # Increments each poll
+
+    def update_node(self, node_id: str, status: dict | None, traffic: dict | None) -> None:
+        """Update data for a single node after polling it."""
+        if node_id not in self._nodes:
+            self._nodes[node_id] = NodeSnapshot(node_id=node_id)
+
+        snapshot = self._nodes[node_id]
+        if status is not None:
+            snapshot.status_response = status
+        if traffic is not None:
+            snapshot.traffic_response = traffic
+        snapshot.last_updated = time.monotonic()
+        self._cycle_count += 1
+
+    def update_global(self, node_status: dict[str, str],
+                      heartbeat_age: dict[str, float],
+                      replication: dict[int, int]) -> None:
+        """Update global data (from /nodes and /replication endpoints)."""
+        self._node_status = node_status
+        self._heartbeat_age = heartbeat_age
+        self._replication = replication
+
+        # Update per-node snapshots with status and heartbeat data
+        for node_id, status in node_status.items():
+            if node_id not in self._nodes:
+                self._nodes[node_id] = NodeSnapshot(node_id=node_id)
+            self._nodes[node_id].node_status = status
+
+        for node_id, age in heartbeat_age.items():
+            if node_id not in self._nodes:
+                self._nodes[node_id] = NodeSnapshot(node_id=node_id)
+            self._nodes[node_id].heartbeat_age = age
+
+    @property
+    def statuses(self) -> list[dict]:
+        """All accumulated /status responses (for Overview tab widgets)."""
+        return [
+            snapshot.status_response
+            for snapshot in self._nodes.values()
+            if snapshot.status_response is not None
+        ]
+
+    @property
+    def replication(self) -> dict[int, int]:
+        """Replication distribution histogram."""
+        return self._replication
+
+    @property
+    def node_status(self) -> dict[str, str]:
+        """Node status map (alive/suspect/dead/unreachable)."""
+        return self._node_status
+
+    @property
+    def heartbeat_age(self) -> dict[str, float]:
+        """Heartbeat age in seconds per node."""
+        return self._heartbeat_age
+
+    @property
+    def traffic_reports(self) -> list[dict]:
+        """All accumulated /traffic responses (for Traffic/Heatmap widgets)."""
+        return [
+            snapshot.traffic_response
+            for snapshot in self._nodes.values()
+            if snapshot.traffic_response is not None
+        ]
+
+    @property
+    def cycle_count(self) -> int:
+        """Number of node updates performed (for heatmap freshness tracking)."""
+        return self._cycle_count
