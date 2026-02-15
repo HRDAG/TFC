@@ -416,11 +416,11 @@ class TrafficHeatmap(DataTable):
         return gradient
 
     def on_mount(self) -> None:
-        # Header row: "From↓ To→" + node short names (4 chars)
+        # Header row: "From↓ To→" + node short names (3 chars)
         self.add_column("From↓ To→", width=10, key="source")
         for node in self.node_names:
-            node_abbrev = short(node)[:4]
-            self.add_column(node_abbrev, width=4, key=f"dest_{node}")
+            node_abbrev = short(node)[:3]
+            self.add_column(node_abbrev, width=3, key=f"dest_{node}")
 
         self.cursor_type = "none"
 
@@ -454,12 +454,12 @@ class TrafficHeatmap(DataTable):
 
         # Render heatmap rows
         for src in self.node_names:
-            row = [short(src)[:4]]
+            row = [short(src)[:3]]
 
             for dst in self.node_names:
                 if src == dst:
-                    # Diagonal: pattern
-                    cell = Text("‾╲__", style="blue on grey27", justify="left")
+                    # Diagonal: pattern (3 chars)
+                    cell = Text("‾╲_", style="blue on grey27", justify="left")
                 else:
                     tx_rate = matrix.get((src, dst), 0.0)
                     cell = self._format_cell(tx_rate, max_rate)
@@ -479,7 +479,7 @@ class TrafficHeatmap(DataTable):
 
         if bytes_per_sec < 1:
             # No traffic
-            return Text("    ", style="on grey11", justify="left")
+            return Text("   ", style="on grey11", justify="left")
 
         # Log scaling as recommended in heatmap.py
         # Use max_rate as upper bound for scaling
@@ -490,7 +490,7 @@ class TrafficHeatmap(DataTable):
         idx = int(t * (len(self._gradient) - 1))
         r, g, b = self._gradient[idx]
 
-        # Create colored block (4 chars wide)
+        # Create colored block (3 chars wide)
         from rich.color import Color
         bg_color = Color.from_rgb(r, g, b)
-        return Text("    ", style=f"on rgb({r},{g},{b})", justify="left")
+        return Text("   ", style=f"on rgb({r},{g},{b})", justify="left")
