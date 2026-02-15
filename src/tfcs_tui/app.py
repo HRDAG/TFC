@@ -118,7 +118,7 @@ class TfcsDashboard(App):
             from tfcs_tui.mock import IP_MAP
             self._ip_map = IP_MAP
         else:
-            self._ip_map = load_tailscale_ip_map()
+            self._ip_map = load_tailscale_ip_map(self._peer_hosts)
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -150,8 +150,8 @@ class TfcsDashboard(App):
             self.post_message(ClusterData(STATUSES, NODE_STATUS, HEARTBEAT_AGE, REPLICATION))
             self.post_message(TrafficData(TRAFFIC_REPORTS))
         else:
-            self.run_worker(self._poll_cluster, exclusive=True)
-            self.run_worker(self._poll_traffic, exclusive=True)
+            self.run_worker(self._poll_cluster, exclusive=False)
+            self.run_worker(self._poll_traffic, exclusive=False)
 
     async def _poll_cluster(self) -> None:
         """Background worker: poll cluster endpoints."""

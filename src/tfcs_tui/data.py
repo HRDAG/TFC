@@ -233,8 +233,11 @@ async def poll_traffic_matrix(
 # IP to hostname mapping
 # ---------------------------------------------------------------------------
 
-def load_tailscale_ip_map() -> dict[str, str]:
+def load_tailscale_ip_map(peer_hosts: list[str] | None = None) -> dict[str, str]:
     """Parse tailscale status to map IPs to hostnames.
+
+    Args:
+        peer_hosts: Optional list of FQDNs to map short names to
 
     Returns: {"100.64.0.4": "chll.hrdag.net", ...}
     """
@@ -251,14 +254,24 @@ def load_tailscale_ip_map() -> dict[str, str]:
     except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
         return {}
 
+    # Build short name -> FQDN map from peer_hosts
+    short_to_fqdn = {}
+    if peer_hosts:
+        for fqdn in peer_hosts:
+            short_name = short(fqdn)
+            short_to_fqdn[short_name] = fqdn
+
     ip_map = {}
     for line in result.stdout.split('\n'):
-        # Format: "100.64.0.4   chll.hrdag.net    user    linux   active  ..."
+        # Format: "100.64.0.4   chll    user    linux   active  ..."
+        # NOTE: Column 2 is SHORT name, not FQDN!
         parts = line.split()
         if len(parts) >= 2:
             ip = parts[0]
-            hostname = parts[1]
+            short_name = parts[1]
             if ip.startswith('100.'):  # Tailscale IP
+                # Map short name to FQDN if available, otherwise use short name
+                hostname = short_to_fqdn.get(short_name, short_name)
                 ip_map[ip] = hostname
 
     return ip_map

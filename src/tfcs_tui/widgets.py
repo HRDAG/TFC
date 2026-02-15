@@ -275,16 +275,18 @@ class TrafficMatrixTable(DataTable):
         self.ip_to_node = {ip: host for ip, host in ip_map.items()}
 
     def on_mount(self) -> None:
-        # Header row: "From↓ To→" + node short names
+        # Header row: "From↓ To→" + node short names (4 chars)
         self.add_column("From↓ To→", width=10, key="source")
         for node in self.node_names:
-            self.add_column(short(node), width=8, key=f"dest_{node}")
+            # Truncate to 4 chars for compact display
+            node_abbrev = short(node)[:4]
+            self.add_column(node_abbrev, width=4, key=f"dest_{node}")
 
         self.cursor_type = "none"
 
-        # Center column headers
+        # Right-align column headers to match cell data
         for col_key in self.columns:
-            self.columns[col_key].label_align = ("center", "middle")
+            self.columns[col_key].label_align = ("right", "middle")
 
     def refresh_data(self, traffic_reports: list[dict]) -> None:
         """Update matrix from /traffic poll results.
@@ -309,12 +311,13 @@ class TrafficMatrixTable(DataTable):
 
         # Render matrix rows
         for src in self.node_names:
-            row = [short(src)]
+            # Truncate row labels to 4 chars to match column headers
+            row = [short(src)[:4]]
 
             for dst in self.node_names:
                 if src == dst:
-                    # Diagonal: self-traffic (should be zero)
-                    cell = Text("--", style="dim", justify="right")
+                    # Diagonal: pattern creating descending line
+                    cell = Text("‾╲__", style="blue on grey27", justify="left")
                 else:
                     tx_rate = matrix.get((src, dst), 0.0)
                     cell = self._format_cell(tx_rate)
@@ -326,18 +329,23 @@ class TrafficMatrixTable(DataTable):
     def _format_cell(self, bytes_per_sec: float) -> Text:
         """Format cell with rate and color gradient (cool → warm)."""
 
-        if bytes_per_sec < 1024:
-            # < 1 KB/s: essentially nothing
+        if bytes_per_sec < 1:
+            # Truly zero or negligible
             return Text("--", style="dim", justify="right")
 
-        # Format rate
+        # Format rate (show even tiny amounts)
         if bytes_per_sec >= 1024 * 1024:
             rate_str = f"{bytes_per_sec/(1024*1024):.1f}M"
-        else:
+        elif bytes_per_sec >= 1024:
             rate_str = f"{bytes_per_sec/1024:.0f}K"
+        else:
+            # < 1 KB/s: show in bytes (e.g., "45" for 45 B/s)
+            rate_str = f"{bytes_per_sec:.0f}"
 
         # Color gradient: cool (blue) → warm (red)
-        if bytes_per_sec < 100 * 1024:         # < 100 KB/s
+        if bytes_per_sec < 1024:               # < 1 KB/s (tiny cluster traffic)
+            style = "dim cyan"
+        elif bytes_per_sec < 100 * 1024:       # < 100 KB/s
             style = "blue"
         elif bytes_per_sec < 500 * 1024:       # < 500 KB/s
             style = "cyan"
