@@ -214,7 +214,12 @@ class NodesTable(DataTable):
     ) -> None:
         self.clear()
 
-        for s in sorted(statuses, key=lambda x: x["node_id"]):
+        # Sort with scott first, then alphabetical
+        def sort_key(s):
+            nid = s["node_id"]
+            return (0 if nid.startswith("scott.") else 1, nid)
+
+        for s in sorted(statuses, key=sort_key):
             nid = s["node_id"]
             status = node_status.get(nid, "unknown")
             hb_age = heartbeat_age.get(nid, 0.0)
@@ -271,7 +276,10 @@ class TrafficMatrixTable(DataTable):
             ip_map: {ip: hostname} mapping from tailscale status
         """
         super().__init__()
-        self.node_names = sorted(node_names)
+        # Sort with scott first, then alphabetical
+        scott = [n for n in node_names if n.startswith("scott.")]
+        others = sorted([n for n in node_names if not n.startswith("scott.")])
+        self.node_names = scott + others
         self.ip_to_node = {ip: host for ip, host in ip_map.items()}
 
     def on_mount(self) -> None:
@@ -383,9 +391,16 @@ class TrafficHeatmap(Static):
             ip_map: {ip: hostname} mapping from tailscale status
         """
         super().__init__()
-        self.node_names = sorted(node_names)
+        # Sort with scott first, then alphabetical
+        self.node_names = self._sort_nodes(node_names)
         self.ip_to_node = {ip: host for ip, host in ip_map.items()}
         self._gradient = self._make_gradient()
+
+    def _sort_nodes(self, nodes: list[str]) -> list[str]:
+        """Sort nodes with scott.hrdag.net first, then alphabetical."""
+        scott = [n for n in nodes if n.startswith("scott.")]
+        others = sorted([n for n in nodes if not n.startswith("scott.")])
+        return scott + others
 
     def _make_gradient(self) -> list[tuple[int, int, int]]:
         """Build gradient: black → blue → cyan → green → yellow → red."""
@@ -442,28 +457,52 @@ class TrafficHeatmap(Static):
 
         # Header row
         header = Text()
-        header.append("From↓ To→ ", style="bold")
+        header.append("From↓ To→         ", style="bold")  # Space for full row labels
         for node in self.node_names:
-            header.append(short(node)[:3], style="bold")
+            header.append(f"{short(node):>4}", style="bold")
         lines.append(header)
 
         # Data rows
         for src in self.node_names:
             row = Text()
-            # Row label (left-padded to 10 chars to match header)
-            row.append(f"{short(src)[:3]:>9} ", style="")
+            # Row label (full length, right-aligned to 17 chars)
+            row.append(f"{short(src):>17} ", style="")
 
-            # Cells (3 chars each, touching)
+            # Cells (4 chars each, touching)
             for dst in self.node_names:
                 if src == dst:
-                    # Diagonal: pattern (3 chars)
-                    row.append("‾╲_", style="blue on grey27")
+                    # Diagonal: pattern (4 chars)
+                    row.append("‾‾╲_", style="blue on grey27")
                 else:
                     tx_rate = matrix.get((src, dst), 0.0)
                     text, style = self._format_cell(tx_rate, max_rate)
                     row.append(text, style=style)
 
             lines.append(row)
+
+        # Legend (gradient bar with scale)
+        lines.append(Text())  # Blank line
+        legend = Text()
+        legend.append("                  ", style="")  # Align with data (17 + 1)
+        legend.append("0 ", style="dim")
+
+        # Draw gradient bar (40 chars)
+        bar_len = 40
+        for i in range(bar_len):
+            t = i / (bar_len - 1)
+            idx = int(t * (len(self._gradient) - 1))
+            r, g, b = self._gradient[idx]
+            legend.append(" ", style=f"on rgb({r},{g},{b})")
+
+        # Max label with human-readable format
+        if max_rate >= 1_000_000:
+            max_label = f" {max_rate/1_000_000:.1f}M"
+        elif max_rate >= 1_000:
+            max_label = f" {max_rate/1_000:.0f}K"
+        else:
+            max_label = f" {max_rate:.0f}"
+        legend.append(max_label, style="dim")
+        lines.append(legend)
 
         # Update widget with rendered text
         grid = Text("\n").join(lines)
@@ -483,7 +522,7 @@ class TrafficHeatmap(Static):
 
         if bytes_per_sec < 1:
             # No traffic
-            return ("   ", "on grey11")
+            return ("    ", "on grey11")
 
         # Log scaling as recommended in heatmap.py
         # Use max_rate as upper bound for scaling
@@ -494,5 +533,5 @@ class TrafficHeatmap(Static):
         idx = int(t * (len(self._gradient) - 1))
         r, g, b = self._gradient[idx]
 
-        # Return colored block (3 chars wide) as (text, style)
-        return ("   ", f"on rgb({r},{g},{b})")
+        # Return colored block (4 chars wide) as (text, style)
+        return ("    ", f"on rgb({r},{g},{b})")
