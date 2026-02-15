@@ -35,6 +35,7 @@ from tfcs_tui.data import (
 from tfcs_tui.widgets import (
     NodesTable,
     ReplicationChart,
+    ReplicationVelocity,
     TrafficHeatmap,
     TrafficMatrixTable,
     TransfersTable,
@@ -116,6 +117,7 @@ class TfcsDashboard(App):
         with TabbedContent(initial="tab-overview"):
             with TabPane("Overview", id="tab-overview"):
                 yield ReplicationChart()
+                yield ReplicationVelocity(self._target_copies)
                 yield NodesTable()
                 yield TransfersTable()
             with TabPane("Traffic", id="tab-traffic"):
@@ -225,10 +227,12 @@ class TfcsDashboard(App):
 
     def on_node_updated(self, message: NodeUpdated) -> None:
         """Update ALL widgets from the datastore."""
+        import time
         store = self._store
 
         # Overview widgets
         self.query_one(ReplicationChart).refresh_data(store.replication, self._target_copies)
+        self.query_one(ReplicationVelocity).refresh_data(store.replication, timestamp=time.time())
         self.query_one(NodesTable).refresh_data(store.statuses, store.node_status, store.heartbeat_age)
         self.query_one(TransfersTable).refresh_data(store.statuses)
 

@@ -105,6 +105,135 @@ class ReplicationChart(Static):
 
 
 # ---------------------------------------------------------------------------
+# Replication velocity
+# ---------------------------------------------------------------------------
+
+class ReplicationVelocity(Static):
+    """Track replication progress over 5-minute rolling window."""
+
+    DEFAULT_CSS = """
+    ReplicationVelocity {
+        padding: 0 1;
+        height: auto;
+        margin-bottom: 1;
+        border: solid green;
+    }
+    """
+
+    def __init__(self, target_copies: int = 3) -> None:
+        super().__init__()
+        self._target = target_copies
+        self._history: list[tuple[float, dict[int, int]]] = []  # (timestamp, distribution)
+        self._window_seconds = 300.0  # 5 minutes
+
+    def refresh_data(self, repl: dict[int, int], timestamp: float | None = None) -> None:
+        """Update with new replication snapshot."""
+        import time
+        if timestamp is None:
+            timestamp = time.time()
+
+        # Add current snapshot to history
+        self._history.append((timestamp, dict(repl)))
+
+        # Prune snapshots older than window
+        cutoff = timestamp - self._window_seconds
+        self._history = [(ts, dist) for ts, dist in self._history if ts >= cutoff]
+
+        # Need at least 2 snapshots AND 1 minute elapsed to calculate velocity
+        if len(self._history) < 2:
+            self.update(Text("Replication Progress (warming up...)", style="dim"))
+            return
+
+        # Calculate deltas between oldest and newest
+        oldest_ts, oldest_dist = self._history[0]
+        newest_ts, newest_dist = self._history[-1]
+        elapsed_sec = newest_ts - oldest_ts
+
+        if elapsed_sec < 60:  # Less than 1 minute of data
+            self.update(Text("Replication Progress (collecting data...)", style="dim"))
+            return
+
+        # Under-replicated = 1, 2, 3 copies (target is 4+)
+        # At target = 4+ copies (bucket 4 in the distribution)
+        under_replicated_old = sum(oldest_dist.get(i, 0) for i in [1, 2, 3])
+        under_replicated_new = sum(newest_dist.get(i, 0) for i in [1, 2, 3])
+        at_target_old = oldest_dist.get(4, 0)  # 4+ copies bucket
+        at_target_new = newest_dist.get(4, 0)
+
+        under_delta = under_replicated_new - under_replicated_old
+        target_delta = at_target_new - at_target_old
+
+        # Convert to per-minute rate
+        elapsed_min = elapsed_sec / 60.0
+        under_rate = under_delta / elapsed_min if elapsed_min > 0 else 0
+        target_rate = target_delta / elapsed_min if elapsed_min > 0 else 0
+
+        # Build display
+        lines = []
+        window_min = int(elapsed_sec / 60)
+        lines.append(Text(f"Replication Progress ({window_min}min window)", style="bold"))
+
+        # Under-replicated section (1, 2, 3 copies)
+        lines.append(Text())
+        under_text = Text()
+        under_text.append(f"Under-replicated: {under_replicated_new:,} commits", style="")
+        lines.append(under_text)
+
+        # Per-bucket breakdown (1, 2, 3 copies only - no 0-copy bucket)
+        for copies in [1, 2, 3]:
+            old_count = oldest_dist.get(copies, 0)
+            new_count = newest_dist.get(copies, 0)
+            delta = new_count - old_count
+            rate = delta / elapsed_min if elapsed_min > 0 else 0
+
+            line = Text()
+            if copies == 1:
+                line.append(f"  1 copy:   {new_count:>4}", style="")
+            else:
+                line.append(f"  {copies} copies: {new_count:>4}", style="")
+
+            # Show delta and rate
+            if abs(delta) > 0:
+                sign = "+" if delta > 0 else ""
+                line.append(f"  ({sign}{delta} in {window_min}m = ", style="dim")
+                if abs(rate) >= 0.1:
+                    line.append(f"{rate:+.1f}/min)", style="dim")
+                else:
+                    line.append("~0/min)", style="dim")
+            else:
+                line.append("  (---)", style="dim")
+
+            lines.append(line)
+
+        # At-target section (4+ copies)
+        lines.append(Text())
+        target_text = Text()
+        target_text.append(f"At target (4+): {at_target_new:,}", style="green")
+        if abs(target_delta) > 0:
+            sign = "+" if target_delta > 0 else ""
+            target_text.append(f" ({sign}{target_delta}/{window_min}m = ", style="dim")
+            if abs(target_rate) >= 0.1:
+                target_text.append(f"{target_rate:+.1f}/min)", style="dim")
+            else:
+                target_text.append("~0/min)", style="dim")
+        else:
+            target_text.append(" (stalled)", style="dim yellow")
+        lines.append(target_text)
+
+        # Net velocity
+        lines.append(Text())
+        net_text = Text()
+        net_text.append("Net velocity: ", style="bold")
+        if abs(target_rate) >= 0.1:
+            net_text.append(f"{target_rate:+.1f} commits/min → target", style="green" if target_rate > 0 else "red")
+        else:
+            net_text.append("STALLED", style="yellow")
+        lines.append(net_text)
+
+        self.update(Text("\n").join(lines))
+
+
+# ---------------------------------------------------------------------------
 # Transfers table
 # ---------------------------------------------------------------------------
 
