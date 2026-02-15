@@ -178,7 +178,10 @@ class TfcsDashboard(App):
         self._current_node_index = (self._current_node_index + 1) % len(self._peer_hosts)
 
         # Spawn worker to fetch from this node
-        self.run_worker(self._poll_traffic_single, host, exclusive=False)
+        async def poll_this_node():
+            await self._poll_traffic_single(host)
+
+        self.run_worker(poll_this_node, exclusive=False)
 
     async def _poll_cluster(self) -> None:
         """Background worker: poll cluster endpoints."""
