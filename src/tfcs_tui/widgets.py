@@ -440,7 +440,8 @@ class TrafficHeatmap(Static):
         """
         # Build traffic matrix: {(src_node, dst_node): tx_rate}
         matrix = {}
-        max_rate = 1.0  # Track max for scaling
+        # Fixed scale: 0 to 80 MB/s (prevents jarring color changes)
+        max_rate = 80_000_000.0  # 80 MB/s
 
         for report in traffic_reports:
             src_node = report["node_id"]
@@ -449,8 +450,6 @@ class TrafficHeatmap(Static):
                 if dst_node:
                     tx_rate = stats.get("tx_rate_bytes_per_sec", 0.0)
                     matrix[(src_node, dst_node)] = tx_rate
-                    if tx_rate > max_rate:
-                        max_rate = tx_rate
 
         # Build the heatmap as a single Rich Text object
         lines = []
@@ -496,7 +495,7 @@ class TrafficHeatmap(Static):
             lines.append(row2)
             lines.append(row3)
 
-        # Legend (gradient bar with scale)
+        # Legend (gradient bar with fixed scale: 0 to 80 MB/s)
         lines.append(Text())  # Blank line
         legend = Text()
         legend.append("                  ", style="")  # Align with data (17 + 1)
@@ -510,14 +509,8 @@ class TrafficHeatmap(Static):
             r, g, b = self._gradient[idx]
             legend.append(" ", style=f"on rgb({r},{g},{b})")
 
-        # Max label with human-readable format
-        if max_rate >= 1_000_000:
-            max_label = f" {max_rate/1_000_000:.1f}M"
-        elif max_rate >= 1_000:
-            max_label = f" {max_rate/1_000:.0f}K"
-        else:
-            max_label = f" {max_rate:.0f}"
-        legend.append(max_label, style="dim")
+        # Fixed max label: 80 MB/s
+        legend.append(" 80M", style="dim")
         lines.append(legend)
 
         # Update widget with rendered text
