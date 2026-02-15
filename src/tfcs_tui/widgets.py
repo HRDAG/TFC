@@ -365,13 +365,13 @@ class TrafficMatrixTable(DataTable):
 # Traffic heatmap
 # ---------------------------------------------------------------------------
 
-class TrafficHeatmap(DataTable):
+class TrafficHeatmap(Static):
     """Color-coded traffic intensity heatmap (sender row → receiver col)."""
 
     DEFAULT_CSS = """
     TrafficHeatmap {
         height: auto;
-        max-height: 14;
+        padding: 0 1;
         margin-bottom: 1;
     }
     """
@@ -415,19 +415,6 @@ class TrafficHeatmap(DataTable):
                     break
         return gradient
 
-    def on_mount(self) -> None:
-        # Header row: "From↓ To→" + node short names (3 chars)
-        self.add_column("From↓ To→", width=10, key="source")
-        for node in self.node_names:
-            node_abbrev = short(node)[:3]
-            self.add_column(node_abbrev, width=3, key=f"dest_{node}")
-
-        self.cursor_type = "none"
-
-        # Right-align column headers
-        for col_key in self.columns:
-            self.columns[col_key].label_align = ("right", "middle")
-
     def refresh_data(self, traffic_reports: list[dict]) -> None:
         """Update heatmap from /traffic poll results.
 
@@ -436,8 +423,6 @@ class TrafficHeatmap(DataTable):
                                \"traffic\": {\"100.64.0.4\": {
                                    \"tx_rate_bytes_per_sec\": ..., ...}}}]
         """
-        self.clear()
-
         # Build traffic matrix: {(src_node, dst_node): tx_rate}
         matrix = {}
         max_rate = 1.0  # Track max for scaling
@@ -452,34 +437,53 @@ class TrafficHeatmap(DataTable):
                     if tx_rate > max_rate:
                         max_rate = tx_rate
 
-        # Render heatmap rows
-        for src in self.node_names:
-            row = [short(src)[:3]]
+        # Build the heatmap as a single Rich Text object
+        lines = []
 
+        # Header row
+        header = Text()
+        header.append("From↓ To→ ", style="bold")
+        for node in self.node_names:
+            header.append(short(node)[:3], style="bold")
+        lines.append(header)
+
+        # Data rows
+        for src in self.node_names:
+            row = Text()
+            # Row label (left-padded to 10 chars to match header)
+            row.append(f"{short(src)[:3]:>9} ", style="")
+
+            # Cells (3 chars each, touching)
             for dst in self.node_names:
                 if src == dst:
                     # Diagonal: pattern (3 chars)
-                    cell = Text("‾╲_", style="blue on grey27", justify="left")
+                    row.append("‾╲_", style="blue on grey27")
                 else:
                     tx_rate = matrix.get((src, dst), 0.0)
-                    cell = self._format_cell(tx_rate, max_rate)
+                    text, style = self._format_cell(tx_rate, max_rate)
+                    row.append(text, style=style)
 
-                row.append(cell)
+            lines.append(row)
 
-            self.add_row(*row)
+        # Update widget with rendered text
+        grid = Text("\n").join(lines)
+        self.update(grid)
 
-    def _format_cell(self, bytes_per_sec: float, max_rate: float) -> Text:
+    def _format_cell(self, bytes_per_sec: float, max_rate: float) -> tuple[str, str]:
         """Format cell as colored block with log scaling.
 
         Args:
             bytes_per_sec: Traffic rate in bytes/sec
             max_rate: Maximum rate in current dataset for scaling
+
+        Returns:
+            Tuple of (text, style) for Rich Text.append()
         """
         import math
 
         if bytes_per_sec < 1:
             # No traffic
-            return Text("   ", style="on grey11", justify="left")
+            return ("   ", "on grey11")
 
         # Log scaling as recommended in heatmap.py
         # Use max_rate as upper bound for scaling
@@ -490,7 +494,5 @@ class TrafficHeatmap(DataTable):
         idx = int(t * (len(self._gradient) - 1))
         r, g, b = self._gradient[idx]
 
-        # Create colored block (3 chars wide)
-        from rich.color import Color
-        bg_color = Color.from_rgb(r, g, b)
-        return Text("   ", style=f"on rgb({r},{g},{b})", justify="left")
+        # Return colored block (3 chars wide) as (text, style)
+        return ("   ", f"on rgb({r},{g},{b})")
