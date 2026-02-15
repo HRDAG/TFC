@@ -396,6 +396,10 @@ class TrafficHeatmap(Static):
         self.ip_to_node = {ip: host for ip, host in ip_map.items()}
         self._gradient = self._make_gradient()
 
+        # Track data freshness for dimming
+        self._cell_update_cycle: dict[tuple[str, str], int] = {}
+        self._current_cycle = 0
+
     def _sort_nodes(self, nodes: list[str]) -> list[str]:
         """Sort nodes with scott.hrdag.net first, then alphabetical."""
         scott = [n for n in nodes if n.startswith("scott.")]
@@ -438,6 +442,9 @@ class TrafficHeatmap(Static):
                                \"traffic\": {\"100.64.0.4\": {
                                    \"tx_rate_bytes_per_sec\": ..., ...}}}]
         """
+        # Increment cycle counter for freshness tracking
+        self._current_cycle += 1
+
         # Build traffic matrix: {(src_node, dst_node): tx_rate}
         matrix = {}
         # Fixed scale: 0 to 80 MB/s (prevents jarring color changes)
@@ -450,6 +457,8 @@ class TrafficHeatmap(Static):
                 if dst_node:
                     tx_rate = stats.get("tx_rate_bytes_per_sec", 0.0)
                     matrix[(src_node, dst_node)] = tx_rate
+                    # Mark cell as updated this cycle
+                    self._cell_update_cycle[(src_node, dst_node)] = self._current_cycle
 
         # Build the heatmap as a single Rich Text object
         lines = []
@@ -458,21 +467,21 @@ class TrafficHeatmap(Static):
         header = Text()
         header.append("From↓ To→         ", style="bold")  # Space for full row labels
         for node in self.node_names:
-            # Abbreviate to 5 chars, right-aligned in 7-char cell
-            header.append(f"{short(node)[:5]:>7}", style="bold")
+            # Abbreviate to 5 chars, centered in 7-char cell
+            header.append(f"{short(node)[:5]:^7}", style="bold")
         lines.append(header)
 
         # Data rows (3 lines per node for larger square cells)
         for src in self.node_names:
-            # First line of row
+            # First line of row (no label)
             row1 = Text()
-            row1.append(f"{short(src):>17} ", style="")
+            row1.append(" " * 18, style="")
 
-            # Second line of row (no label, just spacing)
+            # Second line of row (row label in middle)
             row2 = Text()
-            row2.append(" " * 18, style="")
+            row2.append(f"{short(src):>17} ", style="")
 
-            # Third line of row (no label, just spacing)
+            # Third line of row (no label)
             row3 = Text()
             row3.append(" " * 18, style="")
 
@@ -486,7 +495,9 @@ class TrafficHeatmap(Static):
                     row3.append("    ‾╲_", style="blue on grey27")
                 else:
                     tx_rate = matrix.get((src, dst), 0.0)
-                    text, style = self._format_cell(tx_rate, max_rate)
+                    # Calculate freshness (cycles since last update)
+                    cycles_old = self._current_cycle - self._cell_update_cycle.get((src, dst), 0)
+                    text, style = self._format_cell(tx_rate, max_rate, cycles_old)
                     row1.append(text, style=style)
                     row2.append(text, style=style)
                     row3.append(text, style=style)
@@ -517,17 +528,22 @@ class TrafficHeatmap(Static):
         grid = Text("\n").join(lines)
         self.update(grid)
 
-    def _format_cell(self, bytes_per_sec: float, max_rate: float) -> tuple[str, str]:
-        """Format cell as colored block with log scaling.
+    def _format_cell(self, bytes_per_sec: float, max_rate: float, cycles_old: int) -> tuple[str, str]:
+        """Format cell as colored block with log scaling and freshness dimming.
 
         Args:
             bytes_per_sec: Traffic rate in bytes/sec
             max_rate: Maximum rate in current dataset for scaling
+            cycles_old: Number of cycles since last update
 
         Returns:
             Tuple of (text, style) for Rich Text.append()
         """
         import math
+
+        # Fade out stale data (>20 cycles = 20 seconds)
+        if cycles_old > 20:
+            return ("       ", "on grey11")
 
         if bytes_per_sec < 1:
             # No traffic
@@ -542,5 +558,11 @@ class TrafficHeatmap(Static):
         idx = int(t * (len(self._gradient) - 1))
         r, g, b = self._gradient[idx]
 
-        # Return colored block (7 chars wide) as (text, style)
-        return ("       ", f"on rgb({r},{g},{b})")
+        # Apply freshness dimming (linear fade over 20 cycles)
+        freshness = 1.0 - (cycles_old / 20.0)
+        r_dim = int(r * freshness)
+        g_dim = int(g * freshness)
+        b_dim = int(b * freshness)
+
+        # Return colored block (7 chars wide) with dimming
+        return ("       ", f"on rgb({r_dim},{g_dim},{b_dim})")
