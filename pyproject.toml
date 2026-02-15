@@ -1,0 +1,21 @@
+[project]
+name = "tfcs-tui"
+version = "0.1.0"
+description = "Cluster dashboard TUI for tfcs"
+readme = "README.md"
+authors = [
+    { name = "Patrick Ball", email = "pball@hrdag.org" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "textual>=0.50",
+    "aiohttp>=3.9",
+    "humanize>=4.15.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.9.17,<0.10.0"]
+build-backend = "uv_build"
+
+[project.scripts]
+tfcs-tui = "tfcs_tui.app:main"

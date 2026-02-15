@@ -1,0 +1,23 @@
+# Author: PB and Claude
+# Date: 2026-02-14
+# License: (c) HRDAG, 2025, GPL-2 or newer
+#
+# ---
+# config/tfcs-tui.toml
+#
+# Minimal config for the tfcs dashboard TUI.
+# Install to /etc/hrdag/tfcs-tui.toml on each machine that runs the dashboard.
+
+bootstrap_peers = [
+    "scott.hrdag.net:8098",
+    "chll.hrdag.net:8098",
+    "ipfs1.hrdag.net:8098",
+    "pihost.hrdag.net:8098",
+    "meerkat.hrdag.net:8098",
+    "snowball.hrdag.net:8098",
+    "lizo.hrdag.net:8098",
+]
+
+http_port = 8099
+target_copies = 4
+refresh_seconds = 10
