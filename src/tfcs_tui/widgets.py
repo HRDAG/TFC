@@ -434,13 +434,14 @@ class TrafficHeatmap(Static):
                     break
         return gradient
 
-    def refresh_data(self, traffic_reports: list[dict]) -> None:
+    def refresh_data(self, traffic_reports: list[dict], updated_node: str | None = None) -> None:
         """Update heatmap from /traffic poll results.
 
         Args:
             traffic_reports: [{\"node_id\": \"scott.hrdag.net\",
                                \"traffic\": {\"100.64.0.4\": {
                                    \"tx_rate_bytes_per_sec\": ..., ...}}}]
+            updated_node: Which node was just polled (for freshness tracking)
         """
         # Increment cycle counter for freshness tracking
         self._current_cycle += 1
@@ -457,8 +458,9 @@ class TrafficHeatmap(Static):
                 if dst_node:
                     tx_rate = stats.get("tx_rate_bytes_per_sec", 0.0)
                     matrix[(src_node, dst_node)] = tx_rate
-                    # Mark cell as updated this cycle
-                    self._cell_update_cycle[(src_node, dst_node)] = self._current_cycle
+                    # Only mark cell as fresh if it's from the newly updated node
+                    if src_node == updated_node:
+                        self._cell_update_cycle[(src_node, dst_node)] = self._current_cycle
 
         # Build the heatmap as a single Rich Text object
         lines = []

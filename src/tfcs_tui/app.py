@@ -63,9 +63,10 @@ class ClusterData(Message):
 class TrafficData(Message):
     """Posted when traffic matrix poll completes."""
 
-    def __init__(self, reports: list[dict]) -> None:
+    def __init__(self, reports: list[dict], updated_node: str | None = None) -> None:
         super().__init__()
         self.reports = reports
+        self.updated_node = updated_node  # Which node was just polled (for freshness tracking)
 
 
 # ---------------------------------------------------------------------------
@@ -202,9 +203,9 @@ class TfcsDashboard(App):
                 node_id = report["node_id"]
                 self._traffic_data[node_id] = report
 
-                # Post message with all accumulated reports
+                # Post message with all accumulated reports + which node is new
                 reports = list(self._traffic_data.values())
-                self.post_message(TrafficData(reports))
+                self.post_message(TrafficData(reports, updated_node=node_id))
 
     def on_cluster_data(self, message: ClusterData) -> None:
         """Update all widgets with fresh cluster data."""
@@ -232,6 +233,7 @@ class TfcsDashboard(App):
     def on_traffic_data(self, message: TrafficData) -> None:
         """Update traffic matrix and heatmap with fresh data."""
         reports = message.reports
+        updated_node = message.updated_node
 
         # Update title bar based on active tab
         active_tab = self.query_one(TabbedContent).active
@@ -250,7 +252,7 @@ class TfcsDashboard(App):
 
         # Update both traffic views
         self.query_one(TrafficMatrixTable).refresh_data(reports)
-        self.query_one(TrafficHeatmap).refresh_data(reports)
+        self.query_one(TrafficHeatmap).refresh_data(reports, updated_node)
 
     def action_tab_overview(self) -> None:
         """Switch to overview tab."""
