@@ -480,11 +480,11 @@ class TrafficHeatmap(Static):
             # Cells (7 chars each, touching, 3 lines tall)
             for dst in self.node_names:
                 if src == dst:
-                    # Diagonal: pattern (7 chars, 3 lines)
-                    # Diagonal at (1,3), (2,4), (3,5), unspecified = space
-                    row1.append("‾‾╲    ", style="blue on grey27")
-                    row2.append("   ╲   ", style="blue on grey27")
-                    row3.append("    ╲__", style="blue on grey27")
+                    # Diagonal: stepped pattern
+                    # (1,1,‾), (1,2,╲), (2,3,‾), (2,4,╲), (3,5,‾), (3,6,╲), (3,7,_)
+                    row1.append("‾╲     ", style="blue on grey27")
+                    row2.append("  ‾╲   ", style="blue on grey27")
+                    row3.append("    ‾╲_", style="blue on grey27")
                 else:
                     tx_rate = matrix.get((src, dst), 0.0)
                     text, style = self._format_cell(tx_rate, max_rate)
