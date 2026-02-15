@@ -172,3 +172,137 @@ REPLICATION = {
     2: 80,
     3: 43,
 }
+
+# ---------------------------------------------------------------------------
+# Traffic matrix mock data
+# ---------------------------------------------------------------------------
+
+TRAFFIC_REPORTS = [
+    {
+        "node_id": "scott.hrdag.net",
+        "timestamp": 1708032145.2,
+        "poll_interval_secs": 2.5,
+        "window_seconds": 10.0,
+        "samples_in_window": 4,
+        "traffic": {
+            "100.64.0.4": {   # chll
+                "tx_rate_bytes_per_sec": 1200000.0,  # 1.2 MB/s
+                "rx_rate_bytes_per_sec": 890000.0,
+                "connections": 1,
+                "retrans_per_sec": 0.0,
+                "avg_rtt_us": 27000,
+                "min_rtt_us": 25000,
+                "max_rtt_us": 30000,
+            },
+            "100.64.0.20": {  # ipfs1
+                "tx_rate_bytes_per_sec": 45000.0,  # 45 KB/s
+                "rx_rate_bytes_per_sec": 120000.0,
+                "connections": 1,
+                "retrans_per_sec": 0.0,
+                "avg_rtt_us": 15000,
+                "min_rtt_us": 14000,
+                "max_rtt_us": 18000,
+            },
+        },
+    },
+    {
+        "node_id": "chll.hrdag.net",
+        "timestamp": 1708032145.1,
+        "poll_interval_secs": 2.5,
+        "window_seconds": 10.0,
+        "samples_in_window": 4,
+        "traffic": {
+            "100.64.0.30": {  # scott
+                "tx_rate_bytes_per_sec": 890000.0,
+                "rx_rate_bytes_per_sec": 1200000.0,
+                "connections": 1,
+                "retrans_per_sec": 0.0,
+                "avg_rtt_us": 28000,
+                "min_rtt_us": 26000,
+                "max_rtt_us": 31000,
+            },
+            "100.64.0.20": {  # ipfs1
+                "tx_rate_bytes_per_sec": 23000.0,  # 23 KB/s
+                "rx_rate_bytes_per_sec": 450000.0,
+                "connections": 1,
+                "retrans_per_sec": 0.0,
+                "avg_rtt_us": 22000,
+                "min_rtt_us": 20000,
+                "max_rtt_us": 25000,
+            },
+        },
+    },
+    {
+        "node_id": "ipfs1.hrdag.net",
+        "timestamp": 1708032145.3,
+        "poll_interval_secs": 2.5,
+        "window_seconds": 10.0,
+        "samples_in_window": 4,
+        "traffic": {
+            "100.64.0.30": {  # scott
+                "tx_rate_bytes_per_sec": 120000.0,  # 120 KB/s
+                "rx_rate_bytes_per_sec": 45000.0,
+                "connections": 1,
+                "retrans_per_sec": 0.0,
+                "avg_rtt_us": 16000,
+                "min_rtt_us": 15000,
+                "max_rtt_us": 18000,
+            },
+            "100.64.0.4": {  # chll
+                "tx_rate_bytes_per_sec": 450000.0,  # 450 KB/s
+                "rx_rate_bytes_per_sec": 23000.0,
+                "connections": 1,
+                "retrans_per_sec": 0.0,
+                "avg_rtt_us": 21000,
+                "min_rtt_us": 19000,
+                "max_rtt_us": 24000,
+            },
+            "100.64.0.14": {  # lizo
+                "tx_rate_bytes_per_sec": 8500000.0,  # 8.5 MB/s
+                "rx_rate_bytes_per_sec": 8200000.0,
+                "connections": 2,
+                "retrans_per_sec": 0.0,
+                "avg_rtt_us": 75000,
+                "min_rtt_us": 70000,
+                "max_rtt_us": 82000,
+            },
+            "100.64.0.32": {  # meerkat
+                "tx_rate_bytes_per_sec": 2300000.0,  # 2.3 MB/s
+                "rx_rate_bytes_per_sec": 2100000.0,
+                "connections": 1,
+                "retrans_per_sec": 0.0,
+                "avg_rtt_us": 45000,
+                "min_rtt_us": 42000,
+                "max_rtt_us": 50000,
+            },
+            "100.64.0.51": {  # pihost
+                "tx_rate_bytes_per_sec": 15000.0,  # 15 KB/s
+                "rx_rate_bytes_per_sec": 12000.0,
+                "connections": 1,
+                "retrans_per_sec": 0.0,
+                "avg_rtt_us": 18000,
+                "min_rtt_us": 17000,
+                "max_rtt_us": 20000,
+            },
+            "100.64.0.2": {  # snowball
+                "tx_rate_bytes_per_sec": 1200000.0,  # 1.2 MB/s
+                "rx_rate_bytes_per_sec": 1100000.0,
+                "connections": 1,
+                "retrans_per_sec": 0.0,
+                "avg_rtt_us": 32000,
+                "min_rtt_us": 30000,
+                "max_rtt_us": 35000,
+            },
+        },
+    },
+]
+
+IP_MAP = {
+    "100.64.0.30": "scott.hrdag.net",
+    "100.64.0.4": "chll.hrdag.net",
+    "100.64.0.20": "ipfs1.hrdag.net",
+    "100.64.0.14": "lizo.hrdag.net",
+    "100.64.0.32": "meerkat.hrdag.net",
+    "100.64.0.51": "pihost.hrdag.net",
+    "100.64.0.2": "snowball.hrdag.net",
+}

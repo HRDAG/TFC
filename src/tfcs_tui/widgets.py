@@ -247,3 +247,107 @@ class NodesTable(DataTable):
                 Text(peers, justify="right"),
                 Text(pull_str, justify="right"),
             )
+
+
+# ---------------------------------------------------------------------------
+# Traffic matrix
+# ---------------------------------------------------------------------------
+
+class TrafficMatrixTable(DataTable):
+    """7×7 bandwidth matrix showing TX from row → column."""
+
+    DEFAULT_CSS = """
+    TrafficMatrixTable {
+        height: auto;
+        max-height: 14;
+        margin-bottom: 1;
+    }
+    """
+
+    def __init__(self, node_names: list[str], ip_map: dict[str, str]) -> None:
+        """
+        Args:
+            node_names: Sorted list of node FQDNs
+            ip_map: {ip: hostname} mapping from tailscale status
+        """
+        super().__init__()
+        self.node_names = sorted(node_names)
+        self.ip_to_node = {ip: host for ip, host in ip_map.items()}
+
+    def on_mount(self) -> None:
+        # Header row: "From↓ To→" + node short names
+        self.add_column("From↓ To→", width=10, key="source")
+        for node in self.node_names:
+            self.add_column(short(node), width=8, key=f"dest_{node}")
+
+        self.cursor_type = "none"
+
+        # Center column headers
+        for col_key in self.columns:
+            self.columns[col_key].label_align = ("center", "middle")
+
+    def refresh_data(self, traffic_reports: list[dict]) -> None:
+        """Update matrix from /traffic poll results.
+
+        Args:
+            traffic_reports: [{"node_id": "scott.hrdag.net",
+                               "traffic": {"100.64.0.4": {
+                                   "tx_rate_bytes_per_sec": ..., ...}}}]
+        """
+        self.clear()
+
+        # Build traffic matrix: {(src_node, dst_node): tx_rate}
+        matrix = {}
+
+        for report in traffic_reports:
+            src_node = report["node_id"]
+            for peer_ip, stats in report.get("traffic", {}).items():
+                dst_node = self.ip_to_node.get(peer_ip)
+                if dst_node:
+                    tx_rate = stats.get("tx_rate_bytes_per_sec", 0.0)
+                    matrix[(src_node, dst_node)] = tx_rate
+
+        # Render matrix rows
+        for src in self.node_names:
+            row = [short(src)]
+
+            for dst in self.node_names:
+                if src == dst:
+                    # Diagonal: self-traffic (should be zero)
+                    cell = Text("--", style="dim", justify="right")
+                else:
+                    tx_rate = matrix.get((src, dst), 0.0)
+                    cell = self._format_cell(tx_rate)
+
+                row.append(cell)
+
+            self.add_row(*row)
+
+    def _format_cell(self, bytes_per_sec: float) -> Text:
+        """Format cell with rate and color gradient (cool → warm)."""
+
+        if bytes_per_sec < 1024:
+            # < 1 KB/s: essentially nothing
+            return Text("--", style="dim", justify="right")
+
+        # Format rate
+        if bytes_per_sec >= 1024 * 1024:
+            rate_str = f"{bytes_per_sec/(1024*1024):.1f}M"
+        else:
+            rate_str = f"{bytes_per_sec/1024:.0f}K"
+
+        # Color gradient: cool (blue) → warm (red)
+        if bytes_per_sec < 100 * 1024:         # < 100 KB/s
+            style = "blue"
+        elif bytes_per_sec < 500 * 1024:       # < 500 KB/s
+            style = "cyan"
+        elif bytes_per_sec < 1024 * 1024:      # < 1 MB/s
+            style = "green"
+        elif bytes_per_sec < 5 * 1024 * 1024:  # < 5 MB/s
+            style = "yellow"
+        elif bytes_per_sec < 10 * 1024 * 1024: # < 10 MB/s
+            style = "bright_yellow"
+        else:                                   # >= 10 MB/s
+            style = "red bold"
+
+        return Text(rate_str, style=style, justify="right")

@@ -185,3 +185,76 @@ def fmt_uptime(seconds: float) -> str:
     h, rem = divmod(s, 3600)
     m, sec = divmod(rem, 60)
     return f"{h:02d}:{m:02d}:{sec:02d}"
+
+
+# ---------------------------------------------------------------------------
+# Traffic matrix fetcher
+# ---------------------------------------------------------------------------
+
+async def fetch_node_traffic(
+    session: aiohttp.ClientSession, host: str, http_port: int,
+) -> dict | None:
+    """GET /traffic from a single peer.
+
+    Returns: {"node_id": ..., "traffic": {...}, "window_seconds": ..., ...} or None on failure
+    """
+    url = f"http://{host}:{http_port}/traffic"
+    try:
+        async with session.get(
+            url, timeout=aiohttp.ClientTimeout(total=5),
+        ) as resp:
+            if resp.status == 200:
+                return await resp.json()
+    except (aiohttp.ClientError, asyncio.TimeoutError, OSError):
+        pass
+    return None
+
+
+async def poll_traffic_matrix(
+    peer_hosts: list[str], http_port: int,
+) -> list[dict]:
+    """Poll /traffic from all peers concurrently.
+
+    Returns: List of traffic reports from responding nodes.
+             [{"node_id": "scott.hrdag.net", "traffic": {...},
+               "window_seconds": 10.0, "samples_in_window": 4, ...}, ...]
+    """
+    async with aiohttp.ClientSession() as session:
+        tasks = [fetch_node_traffic(session, h, http_port) for h in peer_hosts]
+        results = await asyncio.gather(*tasks)
+        return [r for r in results if r is not None]
+
+
+# ---------------------------------------------------------------------------
+# IP to hostname mapping
+# ---------------------------------------------------------------------------
+
+def load_tailscale_ip_map() -> dict[str, str]:
+    """Parse tailscale status to map IPs to hostnames.
+
+    Returns: {"100.64.0.4": "chll.hrdag.net", ...}
+    """
+    import subprocess
+
+    try:
+        result = subprocess.run(
+            ["tailscale", "status"],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=5,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
+        return {}
+
+    ip_map = {}
+    for line in result.stdout.split('\n'):
+        # Format: "100.64.0.4   chll.hrdag.net    user    linux   active  ..."
+        parts = line.split()
+        if len(parts) >= 2:
+            ip = parts[0]
+            hostname = parts[1]
+            if ip.startswith('100.'):  # Tailscale IP
+                ip_map[ip] = hostname
+
+    return ip_map
