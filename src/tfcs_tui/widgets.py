@@ -459,10 +459,10 @@ class TrafficHeatmap(Static):
         header = Text()
         header.append("From↓ To→         ", style="bold")  # Space for full row labels
         for node in self.node_names:
-            header.append(f"{short(node):>4}", style="bold")
+            header.append(f"{short(node):>7}", style="bold")
         lines.append(header)
 
-        # Data rows (2 lines per node for square cells)
+        # Data rows (3 lines per node for larger square cells)
         for src in self.node_names:
             # First line of row
             row1 = Text()
@@ -472,20 +472,27 @@ class TrafficHeatmap(Static):
             row2 = Text()
             row2.append(" " * 18, style="")
 
-            # Cells (4 chars each, touching, 2 lines tall)
+            # Third line of row (no label, just spacing)
+            row3 = Text()
+            row3.append(" " * 18, style="")
+
+            # Cells (7 chars each, touching, 3 lines tall)
             for dst in self.node_names:
                 if src == dst:
-                    # Diagonal: pattern (4 chars, 2 lines)
-                    row1.append("‾‾╲_", style="blue on grey27")
-                    row2.append("__╱‾", style="blue on grey27")
+                    # Diagonal: pattern (7 chars, 3 lines)
+                    row1.append("‾‾‾‾╲__", style="blue on grey27")
+                    row2.append("___╱‾‾‾", style="blue on grey27")
+                    row3.append("‾‾‾‾‾‾‾", style="blue on grey27")
                 else:
                     tx_rate = matrix.get((src, dst), 0.0)
                     text, style = self._format_cell(tx_rate, max_rate)
                     row1.append(text, style=style)
                     row2.append(text, style=style)
+                    row3.append(text, style=style)
 
             lines.append(row1)
             lines.append(row2)
+            lines.append(row3)
 
         # Legend (gradient bar with scale)
         lines.append(Text())  # Blank line
@@ -529,7 +536,7 @@ class TrafficHeatmap(Static):
 
         if bytes_per_sec < 1:
             # No traffic
-            return ("    ", "on grey11")
+            return ("       ", "on grey11")
 
         # Log scaling as recommended in heatmap.py
         # Use max_rate as upper bound for scaling
@@ -540,5 +547,5 @@ class TrafficHeatmap(Static):
         idx = int(t * (len(self._gradient) - 1))
         r, g, b = self._gradient[idx]
 
-        # Return colored block (4 chars wide) as (text, style)
-        return ("    ", f"on rgb({r},{g},{b})")
+        # Return colored block (7 chars wide) as (text, style)
+        return ("       ", f"on rgb({r},{g},{b})")
