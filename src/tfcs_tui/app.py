@@ -172,12 +172,14 @@ class TfcsDashboard(App):
         heartbeat_age = message.heartbeat_age
         replication = message.replication
 
-        # Title bar
-        n_nodes = len(statuses)
-        title_bar = self.query_one("#title-bar", Static)
-        title_bar.update(
-            f" tfcs cluster dashboard    {n_nodes} nodes"
-        )
+        # Update title bar (only if on overview tab)
+        active_tab = self.query_one(TabbedContent).active
+        if active_tab == "tab-overview":
+            n_nodes = len(statuses)
+            title_bar = self.query_one("#title-bar", Static)
+            title_bar.update(
+                f" tfcs cluster dashboard    {n_nodes} nodes"
+            )
 
         # Widgets
         self.query_one(ReplicationChart).refresh_data(
@@ -190,12 +192,14 @@ class TfcsDashboard(App):
         """Update traffic matrix with fresh data."""
         reports = message.reports
 
-        # Update title bar
-        n_reporting = len(reports)
-        title_bar = self.query_one("#title-bar", Static)
-        title_bar.update(
-            f" tfcs traffic matrix    {n_reporting}/{len(self._peer_hosts)} nodes reporting"
-        )
+        # Update title bar (only if on traffic tab)
+        active_tab = self.query_one(TabbedContent).active
+        if active_tab == "tab-traffic":
+            n_reporting = len(reports)
+            title_bar = self.query_one("#title-bar", Static)
+            title_bar.update(
+                f" tfcs traffic matrix    {n_reporting}/{len(self._peer_hosts)} nodes reporting"
+            )
 
         # Update traffic matrix
         self.query_one(TrafficMatrixTable).refresh_data(reports)
@@ -203,10 +207,16 @@ class TfcsDashboard(App):
     def action_tab_overview(self) -> None:
         """Switch to overview tab."""
         self.query_one(TabbedContent).active = "tab-overview"
+        # Update title bar for overview
+        title_bar = self.query_one("#title-bar", Static)
+        title_bar.update(" tfcs cluster dashboard")
 
     def action_tab_traffic(self) -> None:
         """Switch to traffic tab."""
         self.query_one(TabbedContent).active = "tab-traffic"
+        # Update title bar for traffic
+        title_bar = self.query_one("#title-bar", Static)
+        title_bar.update(" tfcs traffic matrix")
 
     def action_scroll_down(self) -> None:
         table = self.query_one(TransfersTable)
