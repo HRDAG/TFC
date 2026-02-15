@@ -71,13 +71,13 @@ class ReplicationChart(Static):
             filled = int(count / max_count * bar_width) if max_count else 0
             bar_str = "\u2588" * filled
 
-            # Color scheme: 1=red, 2=orange, 3=yellow, 4+=green
+            # Color scheme: 1=red, 2=yellow, 3=orange, 4+=green
             if copies == 1:
                 style = "red"
             elif copies == 2:
-                style = "bright_yellow"  # orange-ish
-            elif copies == 3:
                 style = "yellow"
+            elif copies == 3:
+                style = "bright_yellow"  # orange-ish
             else:
                 style = "green"
 
