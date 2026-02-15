@@ -148,9 +148,9 @@ class TransfersTable(DataTable):
                 else:
                     prog = Text("--")
 
-                # Humanize rate: 44.9 MB/s -> "45 MB/s", 8.5 MB/s -> "8.5 MB/s"
+                # Convert rate from Mbps (megabits/sec) to bytes/sec
                 if rate > 0:
-                    rate_bytes_per_sec = rate * 1_000_000
+                    rate_bytes_per_sec = rate * 125_000  # Mbps → bytes/sec (1Mbps = 125KB/s)
                     rate_str = humanize.naturalsize(rate_bytes_per_sec, binary=False, format="%.1f") + "/s"
                 else:
                     rate_str = "--"
