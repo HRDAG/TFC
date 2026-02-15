@@ -139,9 +139,9 @@ class ReplicationVelocity(Static):
         cutoff = timestamp - self._window_seconds
         self._history = [(ts, dist) for ts, dist in self._history if ts >= cutoff]
 
-        # Need at least 2 snapshots AND 1 minute elapsed to calculate velocity
+        # Need at least 2 snapshots AND 3 minutes elapsed to calculate velocity
         if len(self._history) < 2:
-            self.update(Text("Replication Progress (warming up...)", style="dim"))
+            self.update(Text("Replication Progress (acquiring timing data, stand by...)", style="dim"))
             return
 
         # Calculate deltas between oldest and newest
@@ -149,8 +149,8 @@ class ReplicationVelocity(Static):
         newest_ts, newest_dist = self._history[-1]
         elapsed_sec = newest_ts - oldest_ts
 
-        if elapsed_sec < 60:  # Less than 1 minute of data
-            self.update(Text("Replication Progress (collecting data...)", style="dim"))
+        if elapsed_sec < 180:  # Less than 3 minutes of data
+            self.update(Text("Replication Progress (acquiring timing data, stand by...)", style="dim"))
             return
 
         # Under-replicated = 1, 2, 3 copies (target is 4+)
