@@ -132,6 +132,11 @@ class ReplicationVelocity(Static):
         if timestamp is None:
             timestamp = time.time()
 
+        # Skip empty/unpopulated data (during startup before first global poll)
+        if not repl or sum(repl.values()) == 0:
+            self.update(Text("Replication Progress (acquiring timing data, stand by...)", style="dim"))
+            return
+
         # Add current snapshot to history
         self._history.append((timestamp, dict(repl)))
 
