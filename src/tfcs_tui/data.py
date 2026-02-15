@@ -204,7 +204,11 @@ async def fetch_node_traffic(
             url, timeout=aiohttp.ClientTimeout(total=5),
         ) as resp:
             if resp.status == 200:
-                return await resp.json()
+                data = await resp.json()
+                # Ensure node_id is present (use host if backend doesn't provide it)
+                if "node_id" not in data:
+                    data["node_id"] = host
+                return data
     except (aiohttp.ClientError, asyncio.TimeoutError, OSError):
         pass
     return None
