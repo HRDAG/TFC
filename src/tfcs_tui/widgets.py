@@ -757,6 +757,10 @@ class LatencyHeatmap(BaseHeatmap):
         super().__init__(node_names)
         self.ip_to_node = {ip: host for ip, host in ip_map.items()}
 
+    def _get_row_label_width(self) -> int:
+        """Match TrafficHeatmap spacing."""
+        return 18
+
     def _build_matrix(self, traffic_reports: list[dict]) -> dict[tuple[str, str], float]:
         """Build latency matrix from reports."""
         matrix = {}
@@ -820,6 +824,10 @@ class HeartbeatMatrix(BaseHeatmap):
         margin-bottom: 1;
     }
     """
+
+    def _get_row_label_width(self) -> int:
+        """Match TrafficHeatmap spacing."""
+        return 18
 
     def _build_matrix(self, heartbeat_matrix: dict[str, dict[str, float]]) -> dict[tuple[str, str], float]:
         """Build matrix from heartbeat age data."""
