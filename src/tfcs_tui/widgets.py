@@ -810,6 +810,31 @@ class LatencyHeatmap(BaseHeatmap):
         r_dim, g_dim, b_dim = self._apply_freshness_dimming(r, g, b, cycles_old)
 
         return ("█" * 7, f"rgb({r_dim},{g_dim},{b_dim})")
+
+    def _render_legend(self) -> list[Text]:
+        """Render latency threshold legend."""
+        lines = []
+        lines.append(Text())  # Blank line
+
+        legend = Text()
+        legend.append("                  ", style="")  # Align with data (18 chars)
+
+        # Show color blocks for each threshold
+        thresholds = [
+            ("<1ms", (0, 200, 0)),
+            ("1-5ms", (0, 180, 180)),
+            ("5-10ms", (50, 120, 200)),
+            ("10-50ms", (200, 200, 0)),
+            ("50-100ms", (220, 140, 0)),
+            (">100ms", (220, 0, 0)),
+        ]
+
+        for label, (r, g, b) in thresholds:
+            legend.append("██", style=f"rgb({r},{g},{b})")
+            legend.append(f" {label} ", style="dim")
+
+        lines.append(legend)
+        return lines
 # ---------------------------------------------------------------------------
 # Heartbeat Freshness Matrix
 # ---------------------------------------------------------------------------
@@ -870,3 +895,27 @@ class HeartbeatMatrix(BaseHeatmap):
         r_dim, g_dim, b_dim = self._apply_freshness_dimming(r, g, b, cycles_old)
 
         return ("█" * 7, f"rgb({r_dim},{g_dim},{b_dim})")
+
+    def _render_legend(self) -> list[Text]:
+        """Render heartbeat age threshold legend."""
+        lines = []
+        lines.append(Text())  # Blank line
+
+        legend = Text()
+        legend.append("                  ", style="")  # Align with data (18 chars)
+
+        # Show color blocks for each threshold
+        thresholds = [
+            ("<5s", (0, 200, 0)),
+            ("5-15s", (200, 200, 0)),
+            ("15-60s", (220, 140, 0)),
+            ("1-5m", (220, 0, 0)),
+            (">5m", (100, 0, 0)),
+        ]
+
+        for label, (r, g, b) in thresholds:
+            legend.append("██", style=f"rgb({r},{g},{b})")
+            legend.append(f" {label} ", style="dim")
+
+        lines.append(legend)
+        return lines

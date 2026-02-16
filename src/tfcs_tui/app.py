@@ -39,7 +39,6 @@ from tfcs_tui.widgets import (
     ReplicationChart,
     ReplicationVelocity,
     TrafficHeatmap,
-    TrafficMatrixTable,
     TransfersTable,
 )
 
@@ -69,9 +68,8 @@ class TfcsDashboard(App):
         Binding("r", "refresh", "Refresh"),
         Binding("1", "tab_overview", "Overview", show=False),
         Binding("2", "tab_traffic", "Traffic", show=False),
-        Binding("3", "tab_heatmap", "Heatmap", show=False),
-        Binding("4", "tab_latency", "Latency", show=False),
-        Binding("5", "tab_heartbeats", "Heartbeats", show=False),
+        Binding("3", "tab_latency", "Latency", show=False),
+        Binding("4", "tab_heartbeats", "Heartbeats", show=False),
         Binding("j", "scroll_down", "Down", show=False),
         Binding("k", "scroll_up", "Up", show=False),
     ]
@@ -125,8 +123,6 @@ class TfcsDashboard(App):
                 yield NodesTable()
                 yield TransfersTable()
             with TabPane("Traffic", id="tab-traffic"):
-                yield TrafficMatrixTable(self._peer_hosts, self._ip_map)
-            with TabPane("Bandwidth", id="tab-heatmap"):
                 yield TrafficHeatmap(self._peer_hosts, self._ip_map)
             with TabPane("Latency", id="tab-latency"):
                 yield LatencyHeatmap(self._peer_hosts, self._ip_map)
@@ -250,7 +246,6 @@ class TfcsDashboard(App):
         self.query_one(TransfersTable).refresh_data(store.statuses)
 
         # Traffic widgets
-        self.query_one(TrafficMatrixTable).refresh_data(store.traffic_reports)
         self.query_one(TrafficHeatmap).refresh_data(store.traffic_reports, message.updated_node)
         self.query_one(LatencyHeatmap).refresh_data(store.traffic_reports, message.updated_node)
         self.query_one(HeartbeatMatrix).refresh_data(store.heartbeat_matrix, message.updated_node)
@@ -267,11 +262,6 @@ class TfcsDashboard(App):
             n_nodes = len(self._store.statuses)
             title_bar.update(f" tfcs cluster dashboard    {n_nodes} nodes")
         elif active_tab == "tab-traffic":
-            n_reporting = len(self._store.traffic_reports)
-            title_bar.update(
-                f" tfcs traffic matrix    {n_reporting}/{len(self._peer_hosts)} nodes reporting"
-            )
-        elif active_tab == "tab-heatmap":
             n_reporting = len(self._store.traffic_reports)
             title_bar.update(
                 f" tfcs traffic heatmap    {n_reporting}/{len(self._peer_hosts)} nodes reporting"
@@ -295,11 +285,6 @@ class TfcsDashboard(App):
     def action_tab_traffic(self) -> None:
         """Switch to traffic tab."""
         self.query_one(TabbedContent).active = "tab-traffic"
-        self._update_title_bar()
-
-    def action_tab_heatmap(self) -> None:
-        """Switch to heatmap tab."""
-        self.query_one(TabbedContent).active = "tab-heatmap"
         self._update_title_bar()
 
     def action_tab_latency(self) -> None:

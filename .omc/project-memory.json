@@ -1,0 +1,101 @@
+{
+  "version": "1.0.0",
+  "lastScanned": 1771206316461,
+  "projectRoot": "/home/pball/projects/tfcs-tui-app",
+  "techStack": {
+    "languages": [
+      {
+        "name": "Python",
+        "version": null,
+        "confidence": "high",
+        "markers": [
+          "pyproject.toml"
+        ]
+      }
+    ],
+    "frameworks": [],
+    "packageManager": null,
+    "runtime": null
+  },
+  "build": {
+    "buildCommand": null,
+    "testCommand": "pytest",
+    "lintCommand": "ruff check",
+    "devCommand": null,
+    "scripts": {}
+  },
+  "conventions": {
+    "namingStyle": null,
+    "importStyle": null,
+    "testPattern": null,
+    "fileOrganization": null
+  },
+  "structure": {
+    "isMonorepo": false,
+    "workspaces": [],
+    "mainDirectories": [
+      "docs",
+      "src"
+    ],
+    "gitBranches": null
+  },
+  "customNotes": [],
+  "directoryMap": {
+    "config": {
+      "path": "config",
+      "purpose": "Configuration files",
+      "fileCount": 1,
+      "lastAccessed": 1771206316456,
+      "keyFiles": [
+        "tfcs-tui.toml"
+      ]
+    },
+    "docs": {
+      "path": "docs",
+      "purpose": "Documentation",
+      "fileCount": 5,
+      "lastAccessed": 1771206316456,
+      "keyFiles": [
+        "dashboard-mock-v1.txt",
+        "heatmap-extensions.md",
+        "heatmap.py",
+        "log-replay-animation.md",
+        "traffic-enhancements.md"
+      ]
+    },
+    "src": {
+      "path": "src",
+      "purpose": "Source code",
+      "fileCount": 0,
+      "lastAccessed": 1771206316456,
+      "keyFiles": []
+    }
+  },
+  "hotPaths": [
+    {
+      "path": "src/tfcs_tui/widgets.py",
+      "accessCount": 69,
+      "lastAccessed": 1771209943149,
+      "type": "file"
+    },
+    {
+      "path": "src/tfcs_tui/app.py",
+      "accessCount": 41,
+      "lastAccessed": 1771210091833,
+      "type": "file"
+    },
+    {
+      "path": "src/tfcs_tui/mock.py",
+      "accessCount": 2,
+      "lastAccessed": 1771206439860,
+      "type": "file"
+    },
+    {
+      "path": "heartbeat_widget_temp.py",
+      "accessCount": 1,
+      "lastAccessed": 1771206356060,
+      "type": "file"
+    }
+  ],
+  "userDirectives": []
+}
