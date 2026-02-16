@@ -504,10 +504,108 @@ class TrafficMatrixTable(DataTable):
 
 
 # ---------------------------------------------------------------------------
+# Base heatmap class
+# ---------------------------------------------------------------------------
+
+class BaseHeatmap(Static):
+    """Base class for N×N heatmap grids with 3-row-tall cells."""
+
+    def __init__(self, node_names: list[str]) -> None:
+        super().__init__()
+        self.node_names = self._sort_nodes(node_names)
+        self._cell_update_cycle: dict[tuple[str, str], int] = {}
+        self._current_cycle = 0
+
+    def _sort_nodes(self, nodes: list[str]) -> list[str]:
+        """Sort nodes: scott first, then alphabetical."""
+        scott = [n for n in nodes if n.startswith("scott.")]
+        others = sorted([n for n in nodes if not n.startswith("scott.")])
+        return scott + others
+
+    def _build_matrix(self, data: object) -> dict[tuple[str, str], float]:
+        """Build metric matrix from data. Subclass implements."""
+        raise NotImplementedError
+
+    def _format_cell(self, value: float, cycles_old: int) -> tuple[str, str]:
+        """Format cell with color. Subclass implements."""
+        raise NotImplementedError
+
+    def _get_row_label_width(self) -> int:
+        """Return label width (18 for Traffic, 7 for others)."""
+        return 7  # Override in TrafficHeatmap
+
+    def _get_diagonal_pattern(self) -> tuple[str, str, str]:
+        """Return diagonal pattern for row1, row2, row3."""
+        return ("‾╲     ", "  ‾╲   ", "    ‾╲_")  # Standardized
+
+    def _get_diagonal_style(self) -> str:
+        """Return diagonal style."""
+        return "blue on grey27"
+
+    def _render_legend(self) -> list[Text]:
+        """Render optional legend. Override in TrafficHeatmap."""
+        return []  # No legend by default
+
+    def _render_grid(self, matrix: dict[tuple[str, str], float]) -> None:
+        """Render the grid (shared logic)."""
+        lines = []
+        label_width = self._get_row_label_width()
+        diag_r1, diag_r2, diag_r3 = self._get_diagonal_pattern()
+        diag_style = self._get_diagonal_style()
+
+        # Column header
+        header = Text(" " * label_width)
+        for node in self.node_names:
+            header.append(f"{short(node)[:5]:^7}", style="bold")
+        lines.append(header)
+
+        # Data rows (3 lines per node)
+        for src in self.node_names:
+            row1 = Text(" " * label_width)
+            row2 = Text(f"{short(src):>{label_width-2}}  ")
+            row3 = Text(" " * label_width)
+
+            for dst in self.node_names:
+                if src == dst:
+                    row1.append(diag_r1, style=diag_style)
+                    row2.append(diag_r2, style=diag_style)
+                    row3.append(diag_r3, style=diag_style)
+                else:
+                    value = matrix.get((src, dst), 0.0)
+                    cycles_old = self._current_cycle - self._cell_update_cycle.get((src, dst), 0)
+                    text, style = self._format_cell(value, cycles_old)
+                    row1.append(text, style=style)
+                    row2.append(text, style=style)
+                    row3.append(text, style=style)
+
+            lines.extend([row1, row2, row3])
+
+        # Optional legend
+        lines.extend(self._render_legend())
+
+        # Assemble
+        group = Text()
+        for i, line in enumerate(lines):
+            if i > 0:
+                group.append("\n")
+            group.append(line)
+
+        self.update(group)
+
+    def _apply_freshness_dimming(self, r: int, g: int, b: int, cycles_old: int) -> tuple[int, int, int]:
+        """Apply freshness dimming (shared logic)."""
+        if cycles_old > 20:
+            freshness = 0.0
+        else:
+            freshness = 1.0 - (cycles_old / 20.0)
+        return (int(r * freshness), int(g * freshness), int(b * freshness))
+
+
+# ---------------------------------------------------------------------------
 # Traffic heatmap
 # ---------------------------------------------------------------------------
 
-class TrafficHeatmap(Static):
+class TrafficHeatmap(BaseHeatmap):
     """Color-coded traffic intensity heatmap (sender row → receiver col)."""
 
     DEFAULT_CSS = """
@@ -524,21 +622,25 @@ class TrafficHeatmap(Static):
             node_names: Sorted list of node FQDNs
             ip_map: {ip: hostname} mapping from tailscale status
         """
-        super().__init__()
-        # Sort with scott first, then alphabetical
-        self.node_names = self._sort_nodes(node_names)
+        super().__init__(node_names)
         self.ip_to_node = {ip: host for ip, host in ip_map.items()}
         self._gradient = self._make_gradient()
+        self._max_rate = 80_000_000.0  # Fixed scale: 80 MB/s
 
-        # Track data freshness for dimming
-        self._cell_update_cycle: dict[tuple[str, str], int] = {}
-        self._current_cycle = 0
+    def _get_row_label_width(self) -> int:
+        """Traffic heatmap uses wider labels."""
+        return 18
 
-    def _sort_nodes(self, nodes: list[str]) -> list[str]:
-        """Sort nodes with scott.hrdag.net first, then alphabetical."""
-        scott = [n for n in nodes if n.startswith("scott.")]
-        others = sorted([n for n in nodes if not n.startswith("scott.")])
-        return scott + others
+    def _build_matrix(self, traffic_reports: list[dict]) -> dict[tuple[str, str], float]:
+        """Build traffic matrix from reports."""
+        matrix = {}
+        for report in traffic_reports:
+            src_node = report["node_id"]
+            for peer_ip, stats in report.get("traffic", {}).items():
+                dst_node = self.ip_to_node.get(peer_ip)
+                if dst_node:
+                    matrix[(src_node, dst_node)] = stats.get("tx_rate_bytes_per_sec", 0.0)
+        return matrix
 
     def _make_gradient(self) -> list[tuple[int, int, int]]:
         """Build gradient: black → blue → cyan → green → yellow → red."""
@@ -577,75 +679,49 @@ class TrafficHeatmap(Static):
                                    \"tx_rate_bytes_per_sec\": ..., ...}}}]
             updated_node: Which node was just polled (for freshness tracking)
         """
-        # Increment cycle counter for freshness tracking
         self._current_cycle += 1
+        matrix = self._build_matrix(traffic_reports)
 
-        # Build traffic matrix: {(src_node, dst_node): tx_rate}
-        matrix = {}
-        # Fixed scale: 0 to 80 MB/s (prevents jarring color changes)
-        max_rate = 80_000_000.0  # 80 MB/s
-
+        # Track freshness for cells from updated node
         for report in traffic_reports:
-            src_node = report["node_id"]
-            for peer_ip, stats in report.get("traffic", {}).items():
-                dst_node = self.ip_to_node.get(peer_ip)
-                if dst_node:
-                    tx_rate = stats.get("tx_rate_bytes_per_sec", 0.0)
-                    matrix[(src_node, dst_node)] = tx_rate
-                    # Only mark cell as fresh if it's from the newly updated node
-                    if src_node == updated_node:
-                        self._cell_update_cycle[(src_node, dst_node)] = self._current_cycle
+            if report["node_id"] == updated_node:
+                for peer_ip, stats in report.get("traffic", {}).items():
+                    dst = self.ip_to_node.get(peer_ip)
+                    if dst:
+                        self._cell_update_cycle[(report["node_id"], dst)] = self._current_cycle
 
-        # Build the heatmap as a single Rich Text object
+        self._render_grid(matrix)
+
+    def _format_cell(self, bytes_per_sec: float, cycles_old: int) -> tuple[str, str]:
+        """Format cell as colored block with log scaling and freshness dimming."""
+        import math
+
+        if cycles_old > 20:
+            return ("       ", "on grey11")
+
+        if bytes_per_sec < 1:
+            return ("       ", "on grey11")
+
+        # Log scaling with fixed max_rate
+        t = math.log1p(bytes_per_sec) / math.log1p(max(self._max_rate, 1.0))
+        t = max(0.0, min(1.0, t))
+
+        # Map to gradient color
+        idx = int(t * (len(self._gradient) - 1))
+        r, g, b = self._gradient[idx]
+
+        # Apply freshness dimming
+        r_dim, g_dim, b_dim = self._apply_freshness_dimming(r, g, b, cycles_old)
+
+        return ("       ", f"on rgb({r_dim},{g_dim},{b_dim})")
+
+    def _render_legend(self) -> list[Text]:
+        """Render gradient legend with fixed scale (0-80 MB/s)."""
         lines = []
-
-        # Header row
-        header = Text()
-        header.append("From↓ To→         ", style="bold")  # Space for full row labels
-        for node in self.node_names:
-            # Abbreviate to 5 chars, centered in 7-char cell
-            header.append(f"{short(node)[:5]:^7}", style="bold")
-        lines.append(header)
-
-        # Data rows (3 lines per node for larger square cells)
-        for src in self.node_names:
-            # First line of row (no label)
-            row1 = Text()
-            row1.append(" " * 18, style="")
-
-            # Second line of row (row label in middle)
-            row2 = Text()
-            row2.append(f"{short(src):>17} ", style="")
-
-            # Third line of row (no label)
-            row3 = Text()
-            row3.append(" " * 18, style="")
-
-            # Cells (7 chars each, touching, 3 lines tall)
-            for dst in self.node_names:
-                if src == dst:
-                    # Diagonal: stepped pattern
-                    # (1,1,‾), (1,2,╲), (2,3,‾), (2,4,╲), (3,5,‾), (3,6,╲), (3,7,_)
-                    row1.append("‾╲     ", style="blue on grey27")
-                    row2.append("  ‾╲   ", style="blue on grey27")
-                    row3.append("    ‾╲_", style="blue on grey27")
-                else:
-                    tx_rate = matrix.get((src, dst), 0.0)
-                    # Calculate freshness (cycles since last update)
-                    cycles_old = self._current_cycle - self._cell_update_cycle.get((src, dst), 0)
-                    text, style = self._format_cell(tx_rate, max_rate, cycles_old)
-                    row1.append(text, style=style)
-                    row2.append(text, style=style)
-                    row3.append(text, style=style)
-
-            lines.append(row1)
-            lines.append(row2)
-            lines.append(row3)
-
-        # Legend (gradient bar with fixed scale: 0 to 80 MB/s)
         lines.append(Text())  # Blank line
+
         legend = Text()
-        legend.append("                  ", style="")  # Align with data (17 + 1)
+        legend.append("                  ", style="")  # Align with data (18 chars)
         legend.append("0 ", style="dim")
 
         # Draw gradient bar (40 chars)
@@ -656,49 +732,133 @@ class TrafficHeatmap(Static):
             r, g, b = self._gradient[idx]
             legend.append(" ", style=f"on rgb({r},{g},{b})")
 
-        # Fixed max label: 80 MB/s
         legend.append(" 80M", style="dim")
         lines.append(legend)
 
-        # Update widget with rendered text
-        grid = Text("\n").join(lines)
-        self.update(grid)
+        return lines
 
-    def _format_cell(self, bytes_per_sec: float, max_rate: float, cycles_old: int) -> tuple[str, str]:
-        """Format cell as colored block with log scaling and freshness dimming.
 
-        Args:
-            bytes_per_sec: Traffic rate in bytes/sec
-            max_rate: Maximum rate in current dataset for scaling
-            cycles_old: Number of cycles since last update
+# ---------------------------------------------------------------------------
+# Latency heatmap (RTT)
+# ---------------------------------------------------------------------------
 
-        Returns:
-            Tuple of (text, style) for Rich Text.append()
-        """
-        import math
+class LatencyHeatmap(BaseHeatmap):
+    """Color-coded RTT latency heatmap (sender row → receiver col)."""
 
-        # Fade out stale data (>20 cycles = 20 seconds)
-        if cycles_old > 20:
+    DEFAULT_CSS = """
+    LatencyHeatmap {
+        height: auto;
+        padding: 0 1;
+        margin-bottom: 1;
+    }
+    """
+
+    def __init__(self, node_names: list[str], ip_map: dict[str, str]) -> None:
+        super().__init__(node_names)
+        self.ip_to_node = {ip: host for ip, host in ip_map.items()}
+
+    def _build_matrix(self, traffic_reports: list[dict]) -> dict[tuple[str, str], float]:
+        """Build latency matrix from reports."""
+        matrix = {}
+        for report in traffic_reports:
+            src_node = report["node_id"]
+            for peer_ip, stats in report.get("traffic", {}).items():
+                dst_node = self.ip_to_node.get(peer_ip)
+                if dst_node and stats.get("avg_rtt_us", 0) > 0:
+                    matrix[(src_node, dst_node)] = stats["avg_rtt_us"]
+        return matrix
+
+    def refresh_data(self, traffic_reports: list[dict], updated_node: str | None = None) -> None:
+        """Update heatmap from /traffic poll results showing RTT latency."""
+        self._current_cycle += 1
+        matrix = self._build_matrix(traffic_reports)
+
+        # Track freshness for cells from updated node
+        for report in traffic_reports:
+            if report["node_id"] == updated_node:
+                for peer_ip, stats in report.get("traffic", {}).items():
+                    dst = self.ip_to_node.get(peer_ip)
+                    if dst and stats.get("avg_rtt_us", 0) > 0:
+                        self._cell_update_cycle[(report["node_id"], dst)] = self._current_cycle
+
+        self._render_grid(matrix)
+
+    def _format_cell(self, rtt_us: float, cycles_old: int) -> tuple[str, str]:
+        """Format cell with RTT and color (green → yellow → red for latency)."""
+        if rtt_us < 1:
             return ("       ", "on grey11")
 
-        if bytes_per_sec < 1:
-            # No traffic
+        # Determine color based on latency thresholds
+        if rtt_us < 1000:  # <1ms - Excellent (green)
+            r, g, b = 0, 200, 0
+        elif rtt_us < 5000:  # 1-5ms - Good (cyan)
+            r, g, b = 0, 180, 180
+        elif rtt_us < 10000:  # 5-10ms - OK (blue)
+            r, g, b = 50, 120, 200
+        elif rtt_us < 50000:  # 10-50ms - Fair (yellow)
+            r, g, b = 200, 200, 0
+        elif rtt_us < 100000:  # 50-100ms - Poor (orange)
+            r, g, b = 220, 140, 0
+        else:  # >100ms - Bad (red)
+            r, g, b = 220, 0, 0
+
+        # Apply freshness dimming
+        r_dim, g_dim, b_dim = self._apply_freshness_dimming(r, g, b, cycles_old)
+
+        return ("█" * 7, f"rgb({r_dim},{g_dim},{b_dim})")
+# ---------------------------------------------------------------------------
+# Heartbeat Freshness Matrix
+# ---------------------------------------------------------------------------
+
+class HeartbeatMatrix(BaseHeatmap):
+    """Heartbeat age matrix (observer row → observed peer col)."""
+
+    DEFAULT_CSS = """
+    HeartbeatMatrix {
+        height: auto;
+        padding: 0 1;
+        margin-bottom: 1;
+    }
+    """
+
+    def _build_matrix(self, heartbeat_matrix: dict[str, dict[str, float]]) -> dict[tuple[str, str], float]:
+        """Build matrix from heartbeat age data."""
+        matrix = {}
+        for observer in heartbeat_matrix:
+            for observed, age in heartbeat_matrix[observer].items():
+                matrix[(observer, observed)] = age
+        return matrix
+
+    def refresh_data(self, heartbeat_matrix: dict[str, dict[str, float]], updated_node: str | None = None) -> None:
+        """Update matrix from heartbeat age data."""
+        self._current_cycle += 1
+        matrix = self._build_matrix(heartbeat_matrix)
+
+        # Track which cells were updated
+        if updated_node and updated_node in heartbeat_matrix:
+            for observed in heartbeat_matrix[updated_node]:
+                self._cell_update_cycle[(updated_node, observed)] = self._current_cycle
+
+        self._render_grid(matrix)
+
+    def _format_cell(self, age_seconds: float, cycles_old: int) -> tuple[str, str]:
+        """Format cell with heartbeat age and color (green → yellow → red for staleness)."""
+        if age_seconds < 1:
             return ("       ", "on grey11")
 
-        # Log scaling as recommended in heatmap.py
-        # Use max_rate as upper bound for scaling
-        t = math.log1p(bytes_per_sec) / math.log1p(max(max_rate, 1.0))
-        t = max(0.0, min(1.0, t))
+        # Determine color based on heartbeat freshness
+        if age_seconds < 5:  # <5s - Fresh (green)
+            r, g, b = 0, 200, 0
+        elif age_seconds < 15:  # 5-15s - Slightly stale (yellow)
+            r, g, b = 200, 200, 0
+        elif age_seconds < 60:  # 15-60s - Stale (orange)
+            r, g, b = 220, 140, 0
+        elif age_seconds < 300:  # 60-300s - Very stale (red)
+            r, g, b = 220, 0, 0
+        else:  # >300s - Dead/unknown (dark red)
+            r, g, b = 100, 0, 0
 
-        # Map to gradient color
-        idx = int(t * (len(self._gradient) - 1))
-        r, g, b = self._gradient[idx]
+        # Apply freshness dimming
+        r_dim, g_dim, b_dim = self._apply_freshness_dimming(r, g, b, cycles_old)
 
-        # Apply freshness dimming (linear fade over 20 cycles)
-        freshness = 1.0 - (cycles_old / 20.0)
-        r_dim = int(r * freshness)
-        g_dim = int(g * freshness)
-        b_dim = int(b * freshness)
-
-        # Return colored block (7 chars wide) with dimming
-        return ("       ", f"on rgb({r_dim},{g_dim},{b_dim})")
+        return ("█" * 7, f"rgb({r_dim},{g_dim},{b_dim})")
