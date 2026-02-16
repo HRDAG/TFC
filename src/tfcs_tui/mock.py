@@ -306,3 +306,73 @@ IP_MAP = {
     "100.64.0.51": "pihost.hrdag.net",
     "100.64.0.2": "snowball.hrdag.net",
 }
+
+# ---------------------------------------------------------------------------
+# Heartbeat matrix mock data (observer -> {observed -> age_seconds})
+# ---------------------------------------------------------------------------
+
+HEARTBEAT_MATRIX = {
+    "scott.hrdag.net": {
+        "scott.hrdag.net": 0.0,
+        "lizo.hrdag.net": 2.3,
+        "chll.hrdag.net": 3.1,
+        "ipfs1.hrdag.net": 1.8,
+        "meerkat.hrdag.net": 2.9,
+        "pihost.hrdag.net": 1.2,
+        "snowball.hrdag.net": 45.6,  # Stale
+    },
+    "lizo.hrdag.net": {
+        "scott.hrdag.net": 2.5,
+        "lizo.hrdag.net": 0.0,
+        "chll.hrdag.net": 80.2,  # Very stale
+        "ipfs1.hrdag.net": 3.1,
+        "meerkat.hrdag.net": 2.8,
+        "pihost.hrdag.net": 12.3,
+        "snowball.hrdag.net": 150.0,  # Very stale
+    },
+    "chll.hrdag.net": {
+        "scott.hrdag.net": 3.2,
+        "lizo.hrdag.net": 78.5,  # Very stale
+        "chll.hrdag.net": 0.0,
+        "ipfs1.hrdag.net": 4.1,
+        "meerkat.hrdag.net": 5.2,
+        "pihost.hrdag.net": 3.8,
+        "snowball.hrdag.net": 180.0,  # Very stale
+    },
+    "ipfs1.hrdag.net": {
+        "scott.hrdag.net": 1.9,
+        "lizo.hrdag.net": 2.8,
+        "chll.hrdag.net": 3.9,
+        "ipfs1.hrdag.net": 0.0,
+        "meerkat.hrdag.net": 1.5,
+        "pihost.hrdag.net": 2.1,
+        "snowball.hrdag.net": 35.2,
+    },
+    "meerkat.hrdag.net": {
+        "scott.hrdag.net": 3.0,
+        "lizo.hrdag.net": 2.9,
+        "chll.hrdag.net": 5.1,
+        "ipfs1.hrdag.net": 1.6,
+        "meerkat.hrdag.net": 0.0,
+        "pihost.hrdag.net": 3.3,
+        "snowball.hrdag.net": 42.1,
+    },
+    "pihost.hrdag.net": {
+        "scott.hrdag.net": 1.3,
+        "lizo.hrdag.net": 11.8,
+        "chll.hrdag.net": 3.7,
+        "ipfs1.hrdag.net": 2.2,
+        "meerkat.hrdag.net": 3.4,
+        "pihost.hrdag.net": 0.0,
+        "snowball.hrdag.net": 38.9,
+    },
+    "snowball.hrdag.net": {
+        "scott.hrdag.net": 44.2,
+        "lizo.hrdag.net": 145.0,  # Very stale
+        "chll.hrdag.net": 175.0,  # Very stale
+        "ipfs1.hrdag.net": 36.8,
+        "meerkat.hrdag.net": 40.5,
+        "pihost.hrdag.net": 37.1,
+        "snowball.hrdag.net": 0.0,
+    },
+}

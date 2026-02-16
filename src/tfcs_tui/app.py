@@ -33,6 +33,8 @@ from tfcs_tui.data import (
     poll_traffic_matrix,
 )
 from tfcs_tui.widgets import (
+    HeartbeatMatrix,
+    LatencyHeatmap,
     NodesTable,
     ReplicationChart,
     ReplicationVelocity,
@@ -68,6 +70,8 @@ class TfcsDashboard(App):
         Binding("1", "tab_overview", "Overview", show=False),
         Binding("2", "tab_traffic", "Traffic", show=False),
         Binding("3", "tab_heatmap", "Heatmap", show=False),
+        Binding("4", "tab_latency", "Latency", show=False),
+        Binding("5", "tab_heartbeats", "Heartbeats", show=False),
         Binding("j", "scroll_down", "Down", show=False),
         Binding("k", "scroll_up", "Up", show=False),
     ]
@@ -122,8 +126,12 @@ class TfcsDashboard(App):
                 yield TransfersTable()
             with TabPane("Traffic", id="tab-traffic"):
                 yield TrafficMatrixTable(self._peer_hosts, self._ip_map)
-            with TabPane("Heatmap", id="tab-heatmap"):
+            with TabPane("Bandwidth", id="tab-heatmap"):
                 yield TrafficHeatmap(self._peer_hosts, self._ip_map)
+            with TabPane("Latency", id="tab-latency"):
+                yield LatencyHeatmap(self._peer_hosts, self._ip_map)
+            with TabPane("Heartbeats", id="tab-heartbeats"):
+                yield HeartbeatMatrix(self._peer_hosts)
         yield Footer()
 
     def on_mount(self) -> None:
@@ -136,6 +144,7 @@ class TfcsDashboard(App):
         if self._mock:
             from tfcs_tui.mock import (
                 HEARTBEAT_AGE,
+                HEARTBEAT_MATRIX,
                 NODE_STATUS,
                 REPLICATION,
                 STATUSES,
@@ -146,7 +155,7 @@ class TfcsDashboard(App):
                 self._store.update_node(s["node_id"], status=s, traffic=None)
             for r in TRAFFIC_REPORTS:
                 self._store.update_node(r["node_id"], status=None, traffic=r)
-            self._store.update_global(NODE_STATUS, HEARTBEAT_AGE, REPLICATION)
+            self._store.update_global(NODE_STATUS, HEARTBEAT_AGE, REPLICATION, HEARTBEAT_MATRIX)
             self.post_message(NodeUpdated(updated_node="mock"))
         else:
             # Full burst refresh using existing poll functions
@@ -221,7 +230,11 @@ class TfcsDashboard(App):
                         node_status[nid] = node_info.get("status", "unknown")
                         heartbeat_age[nid] = node_info.get("heartbeat_age_seconds", 0.0)
 
-                self._store.update_global(node_status, heartbeat_age, replication)
+                # Fetch heartbeat matrix from all peers
+                from tfcs_tui.data import fetch_heartbeat_matrix
+                hb_matrix = await fetch_heartbeat_matrix(self._peer_hosts, self._http_port, session)
+
+                self._store.update_global(node_status, heartbeat_age, replication, hb_matrix)
 
             self.post_message(NodeUpdated(updated_node=node_id))
 
@@ -239,6 +252,8 @@ class TfcsDashboard(App):
         # Traffic widgets
         self.query_one(TrafficMatrixTable).refresh_data(store.traffic_reports)
         self.query_one(TrafficHeatmap).refresh_data(store.traffic_reports, message.updated_node)
+        self.query_one(LatencyHeatmap).refresh_data(store.traffic_reports, message.updated_node)
+        self.query_one(HeartbeatMatrix).refresh_data(store.heartbeat_matrix, message.updated_node)
 
         # Update title bar
         self._update_title_bar()
@@ -261,6 +276,16 @@ class TfcsDashboard(App):
             title_bar.update(
                 f" tfcs traffic heatmap    {n_reporting}/{len(self._peer_hosts)} nodes reporting"
             )
+        elif active_tab == "tab-latency":
+            n_reporting = len(self._store.traffic_reports)
+            title_bar.update(
+                f" tfcs latency heatmap    {n_reporting}/{len(self._peer_hosts)} nodes reporting"
+            )
+        elif active_tab == "tab-heartbeats":
+            n_reporting = len(self._store.heartbeat_matrix)
+            title_bar.update(
+                f" tfcs heartbeat matrix    {n_reporting}/{len(self._peer_hosts)} nodes reporting"
+            )
 
     def action_tab_overview(self) -> None:
         """Switch to overview tab."""
@@ -275,6 +300,16 @@ class TfcsDashboard(App):
     def action_tab_heatmap(self) -> None:
         """Switch to heatmap tab."""
         self.query_one(TabbedContent).active = "tab-heatmap"
+        self._update_title_bar()
+
+    def action_tab_latency(self) -> None:
+        """Switch to latency tab."""
+        self.query_one(TabbedContent).active = "tab-latency"
+        self._update_title_bar()
+
+    def action_tab_heartbeats(self) -> None:
+        """Switch to heartbeats tab."""
+        self.query_one(TabbedContent).active = "tab-heartbeats"
         self._update_title_bar()
 
     def action_scroll_down(self) -> None:

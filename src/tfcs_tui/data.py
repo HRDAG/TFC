@@ -342,6 +342,7 @@ class NodeDataStore:
         self._replication: dict[int, int] = {}      # copies -> count
         self._node_status: dict[str, str] = {}      # node_id -> alive/suspect/dead
         self._heartbeat_age: dict[str, float] = {}  # node_id -> seconds
+        self._heartbeat_matrix: dict[str, dict[str, float]] = {}  # observer -> {observed -> age}
         self._cycle_count: int = 0                  # Increments each poll
 
     def update_node(self, node_id: str, status: dict | None, traffic: dict | None) -> None:
@@ -359,11 +360,14 @@ class NodeDataStore:
 
     def update_global(self, node_status: dict[str, str],
                       heartbeat_age: dict[str, float],
-                      replication: dict[int, int]) -> None:
+                      replication: dict[int, int],
+                      heartbeat_matrix: dict[str, dict[str, float]] | None = None) -> None:
         """Update global data (from /nodes and /replication endpoints)."""
         self._node_status = node_status
         self._heartbeat_age = heartbeat_age
         self._replication = replication
+        if heartbeat_matrix is not None:
+            self._heartbeat_matrix = heartbeat_matrix
 
         # Update per-node snapshots with status and heartbeat data
         for node_id, status in node_status.items():
@@ -413,3 +417,40 @@ class NodeDataStore:
     def cycle_count(self) -> int:
         """Number of node updates performed (for heatmap freshness tracking)."""
         return self._cycle_count
+
+    @property
+    def heartbeat_matrix(self) -> dict[str, dict[str, float]]:
+        """Heartbeat age matrix: observer -> {observed -> age_seconds}."""
+        return self._heartbeat_matrix
+
+
+async def fetch_heartbeat_matrix(
+    peer_hosts: list[str], http_port: int, session: aiohttp.ClientSession,
+) -> dict[str, dict[str, float]]:
+    """Fetch /nodes from ALL peers to build heartbeat age matrix.
+    
+    Returns: {observer_node: {observed_node: heartbeat_age_seconds}}
+    """
+    matrix: dict[str, dict[str, float]] = {}
+    
+    # Query /nodes from each peer concurrently
+    tasks = []
+    for host in peer_hosts:
+        tasks.append(fetch_nodes(session, host, http_port))
+    
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    
+    # Build matrix from results
+    for host, result in zip(peer_hosts, results):
+        if isinstance(result, list) and result:
+            # result is the nodes list from this peer's perspective
+            observer = host  # This peer is observing others
+            matrix[observer] = {}
+            
+            for node_info in result:
+                observed = node_info.get("node_id")
+                hb_age = node_info.get("heartbeat_age_seconds", 0.0)
+                if observed:
+                    matrix[observer][observed] = hb_age
+    
+    return matrix
