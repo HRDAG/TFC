@@ -37,6 +37,7 @@ from tfcs_tui.data import (
     save_snapshot,
 )
 from tfcs_tui.widgets import (
+    ClusterOverview,
     HeartbeatMatrix,
     LatencyHeatmap,
     NodesTable,
@@ -133,6 +134,7 @@ class TfcsDashboard(App):
         yield Static("", id="title-bar")
         with TabbedContent(initial="tab-replication"):
             with TabPane("Replication", id="tab-replication"):
+                yield ClusterOverview(self._target_copies)
                 yield ReplicationChart()
                 yield ReplicationVelocity(self._target_copies)
                 yield VelocityChart()
@@ -271,11 +273,16 @@ class TfcsDashboard(App):
 
         # --- Replication tab (Tab 1) ---
         self.query_one(ReplicationChart).refresh_data(store.replication, self._target_copies)
-        self.query_one(ReplicationVelocity).refresh_data(store.replication, timestamp=time.time())
+        velocity_widget = self.query_one(ReplicationVelocity)
+        velocity_widget.refresh_data(store.replication, timestamp=time.time())
 
         # Velocity chart: feed accumulated history
-        velocity_widget = self.query_one(ReplicationVelocity)
         vel_data = velocity_widget.get_velocity_for_snapshot()
+
+        # Feed overview with velocity data from the velocity widget
+        self.query_one(ClusterOverview).refresh_data(
+            store.replication, store.node_status, vel_data,
+        )
 
         if not self._mock and vel_data is not None:
             # Save snapshot to disk (rate-limited internally to 1/min)
@@ -308,9 +315,7 @@ class TfcsDashboard(App):
         title_bar = self.query_one("#title-bar", Static)
 
         if active_tab == "tab-replication":
-            n_nodes = len(self._store.statuses)
-            total = compute_total_copies(self._store.replication)
-            title_bar.update(f" tfcs cluster dashboard    {n_nodes} nodes, {total:,} total copies")
+            title_bar.update(" tfcs cluster dashboard")
         elif active_tab == "tab-nodes":
             n_nodes = len(self._store.statuses)
             n_transfers = sum(len(s.get("claims", [])) for s in self._store.statuses)

@@ -105,6 +105,68 @@ class ReplicationChart(Static):
 
 
 # ---------------------------------------------------------------------------
+# Cluster overview
+# ---------------------------------------------------------------------------
+
+class ClusterOverview(Static):
+    """Cluster overview summary — top of Replication tab."""
+
+    DEFAULT_CSS = """
+    ClusterOverview {
+        padding: 0 1;
+        height: auto;
+        margin-bottom: 0;
+        background: $surface;
+        border: tall $primary;
+    }
+    """
+
+    def __init__(self, target_copies: int = 3) -> None:
+        super().__init__()
+        self._target = target_copies
+
+    def refresh_data(
+        self, replication: dict[int, int], node_status: dict[str, str],
+        velocity_data: dict | None = None,
+    ) -> None:
+        """Update overview from current cluster state."""
+        target = self._target
+        total_commits = sum(replication.values())
+        total_copies = compute_total_copies(replication)
+        satisfied = sum(v for k, v in replication.items() if k >= target)
+        unsatisfied = sum(v for k, v in replication.items() if k < target)
+        sat_pct = round(satisfied / total_commits * 100, 1) if total_commits else 0.0
+
+        n_nodes = len(node_status)
+
+        lines = []
+        # Line 1: node count + total copies
+        lines.append(Text(f"{n_nodes} nodes, {total_copies:,} total copies across {total_commits:,} commits", style="bold"))
+        # Line 2: satisfied / unsatisfied
+        sat_text = Text()
+        sat_text.append(f"Satisfied (>={target} copies): ", style="")
+        sat_text.append(f"{satisfied:,} ({sat_pct}%)", style="green")
+        sat_text.append(f"  Unsatisfied: ", style="")
+        sat_text.append(f"{unsatisfied:,}", style="yellow" if unsatisfied > 0 else "green")
+        lines.append(sat_text)
+        # Line 3: velocity + ETA (compact)
+        if velocity_data is not None:
+            cpm = velocity_data.get("copies_per_min", 0)
+            eta = velocity_data.get("eta_satisfied_min")
+            vel_text = Text()
+            vel_text.append(f"Velocity: ", style="")
+            if cpm >= 0.1:
+                vel_text.append(f"+{cpm:.1f} copies/min", style="green")
+            else:
+                vel_text.append("STALLED", style="yellow")
+            if eta is not None:
+                vel_text.append(f"  ETA: ~{eta:.0f} min ({eta/60:.1f} hr)", style="yellow")
+            lines.append(vel_text)
+
+        self.update(Text("\n").join(lines))
+
+
+# ---------------------------------------------------------------------------
 # Replication velocity
 # ---------------------------------------------------------------------------
 
@@ -188,7 +250,7 @@ class ReplicationVelocity(Static):
 
         # Skip empty/unpopulated data (during startup before first global poll)
         if not repl or sum(repl.values()) == 0:
-            self.update(Text("Replication Progress (acquiring timing data, stand by...)", style="dim"))
+            self.update(Text("(waiting for data...)", style="dim"))
             return
 
         # Add current snapshot to history
@@ -198,16 +260,9 @@ class ReplicationVelocity(Static):
         cutoff = timestamp - self._window_seconds
         self._history = [(ts, dist) for ts, dist in self._history if ts >= cutoff]
 
-        # Total copies headline — always shown when data exists, even before velocity
-        total_copies = compute_total_copies(repl)
-        total_commits = sum(repl.values())
-        lines = []
-        lines.append(Text(f"Total copies: {total_copies:,} across {total_commits:,} commits", style="bold"))
-
-        # Need at least 2 snapshots AND 3 minutes elapsed to calculate velocity
+        # Need at least 2 snapshots to calculate velocity
         if len(self._history) < 2:
-            lines.append(Text("Replication Progress (acquiring timing data, stand by...)", style="dim"))
-            self.update(Text("\n").join(lines))
+            self.update(Text("(waiting for data...)", style="dim"))
             return
 
         # Calculate deltas between oldest and newest
@@ -216,8 +271,7 @@ class ReplicationVelocity(Static):
         elapsed_sec = newest_ts - oldest_ts
 
         if elapsed_sec < 60:  # Less than 1 minute of data
-            lines.append(Text("Replication Progress (smoothing velocity data...)", style="dim"))
-            self.update(Text("\n").join(lines))
+            self.update(Text("(smoothing velocity data...)", style="dim"))
             return
 
         # Weighted total copies velocity (G-Set: only increases)
@@ -229,29 +283,28 @@ class ReplicationVelocity(Static):
         elapsed_min = elapsed_sec / 60.0
         copies_per_min = new_copies / elapsed_min if elapsed_min > 0 else 0.0
 
-        # Build display
         window_min = int(elapsed_sec / 60)
-        lines.append(Text(f"Replication Progress ({window_min}min window)", style="bold"))
-
-        # Under-replicated section (1, 2, 3 copies)
-        under_replicated_new = sum(newest_dist.get(i, 0) for i in [1, 2, 3])
-        lines.append(Text())
-        under_text = Text()
-        under_text.append(f"Under-replicated: {under_replicated_new:,} commits", style="")
-        lines.append(under_text)
-
-        # Per-bucket breakdown (1, 2, 3 copies only - no 0-copy bucket)
-        for copies in [1, 2, 3]:
+        target = self._target
+        lines = []
+        # Per-bucket breakdown — all buckets in one block
+        # Buckets below target, then the target bucket (highest key)
+        all_buckets = sorted(newest_dist.keys())
+        for copies in all_buckets:
+            if copies == 0:
+                continue  # skip 0-copy bucket
             old_count = oldest_dist.get(copies, 0)
             new_count = newest_dist.get(copies, 0)
             delta = new_count - old_count
             rate = delta / elapsed_min if elapsed_min > 0 else 0
 
+            at_target = copies >= target
+            style = "green" if at_target else ""
+
             line = Text()
             if copies == 1:
-                line.append(f"  1 copy:   {new_count:>4}", style="")
+                line.append(f"  1 copy:   {new_count:>4}", style=style)
             else:
-                line.append(f"  {copies} copies: {new_count:>4}", style="")
+                line.append(f"  {copies} copies: {new_count:>4}", style=style)
 
             # Show delta and rate
             if abs(delta) > 0:
@@ -266,37 +319,16 @@ class ReplicationVelocity(Static):
 
             lines.append(line)
 
-        # At-target section
-        at_target_new = newest_dist.get(4, 0)
-        at_target_old = oldest_dist.get(4, 0)
-        target_delta = at_target_new - at_target_old
-        target_rate = target_delta / elapsed_min if elapsed_min > 0 else 0
-        lines.append(Text())
-        target_text = Text()
-        target_text.append(f"At target (4+): {at_target_new:,}", style="green")
-        if abs(target_delta) > 0:
-            sign = "+" if target_delta > 0 else ""
-            target_text.append(f" ({sign}{target_delta}/{window_min}m = ", style="dim")
-            if abs(target_rate) >= 0.1:
-                target_text.append(f"{target_rate:+.1f}/min)", style="dim")
-            else:
-                target_text.append("~0/min)", style="dim")
-        else:
-            target_text.append(" (stalled)", style="dim yellow")
-        lines.append(target_text)
-
         # Net velocity (weighted total_copies math)
         lines.append(Text())
         net_text = Text()
-        net_text.append("Net velocity: ", style="bold")
         if copies_per_min >= 0.1:
-            net_text.append(f"{copies_per_min:+.1f} copies/min", style="green")
+            net_text.append(f"+{copies_per_min:.1f} copies/min", style="green")
         else:
             net_text.append("STALLED", style="yellow")
         lines.append(net_text)
 
         # ETA display
-        target = self._target
         below_target_copies = sum(copies * count for copies, count in newest_dist.items() if copies < target)
         below_target_count = sum(count for copies, count in newest_dist.items() if copies < target)
         if below_target_count > 0 and copies_per_min > 0:
@@ -311,7 +343,7 @@ class ReplicationVelocity(Static):
             elif eta_min < 240:
                 eta_style = "bold yellow"
             else:
-                eta_style = "bold red"
+                eta_style = "bold yellow"
             eta_text = Text()
             eta_text.append(f"ETA to target: ~{eta_min:.0f} min ({eta_min/60:.1f} hr)", style=eta_style)
             lines.append(eta_text)
@@ -531,7 +563,7 @@ class SourceUtilization(DataTable):
 # ---------------------------------------------------------------------------
 
 class VelocityChart(Static):
-    """Bar chart of copies_per_min over time from disk snapshots."""
+    """Velocity-over-time chart using Textual's Sparkline."""
 
     DEFAULT_CSS = """
     VelocityChart {
@@ -551,64 +583,65 @@ class VelocityChart(Static):
             self.update(Text("Velocity chart: collecting data...", style="dim"))
             return
 
-        width = 60
-        height = 8
-
-        # Trim to most recent entries if too many
-        if len(history) > width:
-            history = history[-width:]
+        # Trim to most recent 60 entries
+        if len(history) > 60:
+            history = history[-60:]
 
         values = [v for _, v in history]
-        v_max = max(max(values), 1)  # at least 1 to avoid zero range
+        v_max = max(values)
+        v_min = 0  # Always anchor at 0
+
+        # Unicode block chars for sparkline (8 levels)
+        blocks = " ▁▂▃▄▅▆▇█"
+        v_range = v_max if v_max > 0 else 1.0
 
         lines = []
-        lines.append(Text("Velocity (copies/min)", style="bold"))
+        lines.append(Text(f"Velocity (copies/min)  max: {v_max:.1f}", style="bold"))
 
-        for row in range(height, -1, -1):
-            threshold = v_max * row / height
-            if row == height:
-                label = f"{v_max:>5.0f} |"
-            elif row == 0:
-                label = "    0 |"
+        # Build sparkline rows (4 rows high for resolution)
+        height = 4
+        mid = v_max / 2.0
+        for row in range(height - 1, -1, -1):
+            # Y-axis label: top row = max, middle row = mid, bottom row = 0
+            if row == height - 1:
+                label = f"{v_max:>5.1f}|"
             elif row == height // 2:
-                mid = v_max / 2
-                label = f"{mid:>5.0f} |"
+                label = f"{mid:>5.1f}|"
+            elif row == 0:
+                label = f"{v_min:>5.1f}|"
             else:
-                label = "      |"
-
+                label = "     |"
             line = Text()
             line.append(label, style="dim")
-            for _, v in history:
-                if v >= threshold and v > 0:
-                    line.append("#", style="green")
+            for v in values:
+                # Normalize to 0..height range (anchored at 0), then get sub-block for this row
+                scaled = v / v_range * height
+                row_val = scaled - row  # how much of this row is filled
+                if row_val >= 1.0:
+                    line.append("█", style="green")
+                elif row_val > 0:
+                    idx = int(row_val * 8)
+                    line.append(blocks[max(1, idx)], style="green")
                 else:
                     line.append(" ")
             lines.append(line)
 
-        # X-axis
-        axis_line = Text()
-        axis_line.append("      +", style="dim")
-        axis_line.append("-" * len(history), style="dim")
-        lines.append(axis_line)
-
-        # Time labels: first and last
+        # Time labels: first and last — indent by 6 chars to align with chart area
+        axis_prefix = " " * 6
         first_label = history[0][0]
         last_label = history[-1][0]
         gap = len(history) - len(first_label) - len(last_label)
+        time_line = Text()
+        time_line.append(axis_prefix, style="")
         if gap > 0:
-            time_line = Text()
-            time_line.append("       ", style="dim")
             time_line.append(first_label, style="dim")
             time_line.append(" " * gap, style="dim")
             time_line.append(last_label, style="dim")
         else:
-            time_line = Text()
-            time_line.append("       ", style="dim")
             time_line.append(first_label, style="dim")
         lines.append(time_line)
 
-        group = Text("\n").join(lines)
-        self.update(group)
+        self.update(Text("\n").join(lines))
 
 
 # ---------------------------------------------------------------------------
