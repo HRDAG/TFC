@@ -26,11 +26,15 @@ from textual.widgets import Footer, Header, Static, TabbedContent, TabPane
 from tfcs_tui.data import (
     DEFAULT_CONFIG,
     NodeDataStore,
+    compute_total_copies,
     fetch_node_all,
     load_config,
+    load_recent_snapshots,
     load_tailscale_ip_map,
+    load_velocity_history,
     poll_cluster,
     poll_traffic_matrix,
+    save_snapshot,
 )
 from tfcs_tui.widgets import (
     HeartbeatMatrix,
@@ -38,8 +42,10 @@ from tfcs_tui.widgets import (
     NodesTable,
     ReplicationChart,
     ReplicationVelocity,
+    SourceUtilization,
     TrafficHeatmap,
     TransfersTable,
+    VelocityChart,
 )
 
 
@@ -66,10 +72,11 @@ class TfcsDashboard(App):
     BINDINGS = [
         Binding("q", "quit", "Quit"),
         Binding("r", "refresh", "Refresh"),
-        Binding("1", "tab_overview", "Overview", show=False),
-        Binding("2", "tab_traffic", "Traffic", show=False),
-        Binding("3", "tab_latency", "Latency", show=False),
-        Binding("4", "tab_heartbeats", "Heartbeats", show=False),
+        Binding("1", "tab_replication", "Replication", show=False),
+        Binding("2", "tab_nodes", "Nodes", show=False),
+        Binding("3", "tab_traffic", "Traffic", show=False),
+        Binding("4", "tab_latency", "Latency", show=False),
+        Binding("5", "tab_heartbeats", "Heartbeats", show=False),
         Binding("j", "scroll_down", "Down", show=False),
         Binding("k", "scroll_up", "Up", show=False),
     ]
@@ -113,14 +120,25 @@ class TfcsDashboard(App):
         else:
             self._ip_map = load_tailscale_ip_map(self._peer_hosts)
 
+        # Snapshot persistence (real mode only)
+        if not mock:
+            self._recent_snapshots = load_recent_snapshots()
+            self._velocity_history = load_velocity_history()
+        else:
+            self._recent_snapshots = []
+            self._velocity_history = []
+
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         yield Static("", id="title-bar")
-        with TabbedContent(initial="tab-overview"):
-            with TabPane("Overview", id="tab-overview"):
+        with TabbedContent(initial="tab-replication"):
+            with TabPane("Replication", id="tab-replication"):
                 yield ReplicationChart()
                 yield ReplicationVelocity(self._target_copies)
+                yield VelocityChart()
+            with TabPane("Nodes", id="tab-nodes"):
                 yield NodesTable()
+                yield SourceUtilization()
                 yield TransfersTable()
             with TabPane("Traffic", id="tab-traffic"):
                 yield TrafficHeatmap(self._peer_hosts, self._ip_map)
@@ -132,6 +150,9 @@ class TfcsDashboard(App):
 
     def on_mount(self) -> None:
         self.action_refresh()
+        # Seed rolling window from disk snapshots for immediate velocity
+        if self._recent_snapshots:
+            self.query_one(ReplicationVelocity).seed_from_snapshots(self._recent_snapshots)
         if not self._mock:
             self.set_interval(1.0, self._poll_next_node)
 
@@ -141,10 +162,12 @@ class TfcsDashboard(App):
             from tfcs_tui.mock import (
                 HEARTBEAT_AGE,
                 HEARTBEAT_MATRIX,
+                MOCK_VELOCITY_HISTORY,
                 NODE_STATUS,
                 REPLICATION,
                 STATUSES,
                 TRAFFIC_REPORTS,
+                make_mock_snapshots,
             )
             # Populate the datastore
             for s in STATUSES:
@@ -152,6 +175,13 @@ class TfcsDashboard(App):
             for r in TRAFFIC_REPORTS:
                 self._store.update_node(r["node_id"], status=None, traffic=r)
             self._store.update_global(NODE_STATUS, HEARTBEAT_AGE, REPLICATION, HEARTBEAT_MATRIX)
+
+            # Seed velocity rolling window with mock snapshots
+            self.query_one(ReplicationVelocity).seed_from_snapshots(make_mock_snapshots())
+
+            # Set velocity history for chart
+            self._velocity_history = list(MOCK_VELOCITY_HISTORY)
+
             self.post_message(NodeUpdated(updated_node="mock"))
         else:
             # Full burst refresh using existing poll functions
@@ -239,13 +269,32 @@ class TfcsDashboard(App):
         import time
         store = self._store
 
-        # Overview widgets
+        # --- Replication tab (Tab 1) ---
         self.query_one(ReplicationChart).refresh_data(store.replication, self._target_copies)
         self.query_one(ReplicationVelocity).refresh_data(store.replication, timestamp=time.time())
+
+        # Velocity chart: feed accumulated history
+        velocity_widget = self.query_one(ReplicationVelocity)
+        vel_data = velocity_widget.get_velocity_for_snapshot()
+
+        if not self._mock and vel_data is not None:
+            # Save snapshot to disk (rate-limited internally to 1/min)
+            save_snapshot(store.replication, vel_data, time.time())
+            # Append to in-memory history for chart
+            from datetime import datetime
+            label = datetime.now().strftime("%H:%M")
+            # Avoid duplicate labels for same minute
+            if not self._velocity_history or self._velocity_history[-1][0] != label:
+                self._velocity_history.append((label, vel_data["copies_per_min"]))
+
+        self.query_one(VelocityChart).refresh_data(self._velocity_history)
+
+        # --- Nodes tab (Tab 2) ---
         self.query_one(NodesTable).refresh_data(store.statuses, store.node_status, store.heartbeat_age)
+        self.query_one(SourceUtilization).refresh_data(store.statuses)
         self.query_one(TransfersTable).refresh_data(store.statuses)
 
-        # Traffic widgets
+        # --- Heatmap tabs (Tabs 3-5, unchanged) ---
         self.query_one(TrafficHeatmap).refresh_data(store.traffic_reports, message.updated_node)
         self.query_one(LatencyHeatmap).refresh_data(store.traffic_reports, message.updated_node)
         self.query_one(HeartbeatMatrix).refresh_data(store.heartbeat_matrix, message.updated_node)
@@ -258,9 +307,14 @@ class TfcsDashboard(App):
         active_tab = self.query_one(TabbedContent).active
         title_bar = self.query_one("#title-bar", Static)
 
-        if active_tab == "tab-overview":
+        if active_tab == "tab-replication":
             n_nodes = len(self._store.statuses)
-            title_bar.update(f" tfcs cluster dashboard    {n_nodes} nodes")
+            total = compute_total_copies(self._store.replication)
+            title_bar.update(f" tfcs cluster dashboard    {n_nodes} nodes, {total:,} total copies")
+        elif active_tab == "tab-nodes":
+            n_nodes = len(self._store.statuses)
+            n_transfers = sum(len(s.get("claims", [])) for s in self._store.statuses)
+            title_bar.update(f" tfcs nodes    {n_nodes} nodes, {n_transfers} active transfers")
         elif active_tab == "tab-traffic":
             n_reporting = len(self._store.traffic_reports)
             title_bar.update(
@@ -277,9 +331,14 @@ class TfcsDashboard(App):
                 f" tfcs heartbeat matrix    {n_reporting}/{len(self._peer_hosts)} nodes reporting"
             )
 
-    def action_tab_overview(self) -> None:
-        """Switch to overview tab."""
-        self.query_one(TabbedContent).active = "tab-overview"
+    def action_tab_replication(self) -> None:
+        """Switch to replication tab."""
+        self.query_one(TabbedContent).active = "tab-replication"
+        self._update_title_bar()
+
+    def action_tab_nodes(self) -> None:
+        """Switch to nodes tab."""
+        self.query_one(TabbedContent).active = "tab-nodes"
         self._update_title_bar()
 
     def action_tab_traffic(self) -> None:
@@ -298,10 +357,12 @@ class TfcsDashboard(App):
         self._update_title_bar()
 
     def action_scroll_down(self) -> None:
+        # Scrolls TransfersTable regardless of active tab (harmless when off-screen)
         table = self.query_one(TransfersTable)
         table.scroll_down()
 
     def action_scroll_up(self) -> None:
+        # Scrolls TransfersTable regardless of active tab (harmless when off-screen)
         table = self.query_one(TransfersTable)
         table.scroll_up()
 

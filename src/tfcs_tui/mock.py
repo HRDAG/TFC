@@ -376,3 +376,40 @@ HEARTBEAT_MATRIX = {
         "snowball.hrdag.net": 0.0,
     },
 }
+
+# ---------------------------------------------------------------------------
+# Velocity history mock data (for VelocityChart)
+# ---------------------------------------------------------------------------
+
+MOCK_VELOCITY_HISTORY = [
+    ("14:00", 8.2), ("14:05", 9.1), ("14:10", 7.8),
+    ("14:15", 10.3), ("14:20", 11.0), ("14:25", 9.5),
+    ("14:30", 12.1), ("14:35", 10.8), ("14:40", 11.5),
+    ("14:45", 13.2), ("14:50", 12.0), ("14:55", 14.1),
+]
+
+
+def make_mock_snapshots() -> list[dict]:
+    """Build mock snapshots spanning 5 minutes for immediate velocity display.
+
+    Three snapshots at -300s, -180s, -60s showing gradual replication progress.
+    Current REPLICATION total = 0*180 + 1*120 + 2*80 + 3*43 = 409
+    Oldest snapshot total    = 0*200 + 1*140 + 2*70 + 3*30 = 370
+    delta = 39 copies in 300s = 7.8 copies/min
+    """
+    import time
+    now = time.time()
+    return [
+        {
+            "epoch": now - 300,
+            "histogram": {"0": 200, "1": 140, "2": 70, "3": 30},
+        },
+        {
+            "epoch": now - 180,
+            "histogram": {"0": 192, "1": 132, "2": 74, "3": 35},
+        },
+        {
+            "epoch": now - 60,
+            "histogram": {"0": 185, "1": 125, "2": 78, "3": 40},
+        },
+    ]

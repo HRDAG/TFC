@@ -13,9 +13,12 @@ No tfcs code imports. Pure HTTP client.
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 import time
 import tomllib
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 import aiohttp
@@ -136,6 +139,10 @@ async def poll_cluster(
 # ---------------------------------------------------------------------------
 
 DEFAULT_CONFIG = Path("/etc/hrdag/tfcs-tui.toml")
+SNAPSHOT_DIR = Path("/var/lib/tfcs/diagnostics/snapshots")
+
+_last_snapshot_epoch: float = 0.0
+logger = logging.getLogger(__name__)
 
 
 def load_config(config_path: Path) -> dict:
@@ -446,11 +453,115 @@ async def fetch_heartbeat_matrix(
             # result is the nodes list from this peer's perspective
             observer = host  # This peer is observing others
             matrix[observer] = {}
-            
+
             for node_info in result:
                 observed = node_info.get("node_id")
                 hb_age = node_info.get("heartbeat_age_seconds", 0.0)
                 if observed:
                     matrix[observer][observed] = hb_age
-    
+
     return matrix
+
+
+# ---------------------------------------------------------------------------
+# Snapshot helpers
+# ---------------------------------------------------------------------------
+
+def compute_total_copies(histogram: dict[int, int]) -> int:
+    """Weighted sum of copies: sum(copies * count).
+
+    Accepts dict[int, int] matching NodeDataStore.replication.
+    No int() cast needed — keys are already int from fetch_replication().
+    """
+    return sum(copies * count for copies, count in histogram.items())
+
+
+def save_snapshot(
+    replication: dict[int, int], velocity_data: dict | None, timestamp: float,
+) -> None:
+    """Write JSON snapshot to disk, rate-limited to once per 60 seconds.
+
+    Matches cluster-metrics.py snapshot format (string keys in JSON).
+    Handles PermissionError/OSError gracefully — logs warning, does not crash.
+    """
+    global _last_snapshot_epoch
+    if timestamp - _last_snapshot_epoch < 60:
+        return
+
+    # Convert int keys to string keys for JSON compatibility
+    histogram = {str(k): v for k, v in replication.items()}
+    total_copies = compute_total_copies(replication)
+    total = sum(replication.values())
+    satisfied = sum(v for k, v in replication.items() if k >= 3)
+    sat_pct = round(satisfied / total * 100, 1) if total else 0.0
+
+    dt = datetime.fromtimestamp(timestamp)
+    snapshot = {
+        "ts": dt.strftime("%Y-%m-%d %H:%M:%S"),
+        "epoch": round(timestamp, 1),
+        "histogram": histogram,
+        "total_copies": total_copies,
+        "satisfied": satisfied,
+        "satisfaction_pct": sat_pct,
+        "velocity": velocity_data,
+    }
+
+    ts_file = dt.strftime("%Y%m%d-%H%M%S")
+    try:
+        SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
+        path = SNAPSHOT_DIR / f"{ts_file}.json"
+        path.write_text(json.dumps(snapshot, indent=2) + "\n")
+        _last_snapshot_epoch = timestamp
+    except (PermissionError, OSError) as exc:
+        logger.warning("snapshot write failed: %s", exc)
+
+
+def load_recent_snapshots(window_seconds: float = 600.0) -> list[dict]:
+    """Load recent JSON snapshots from disk within time window.
+
+    Returns list of parsed dicts sorted by epoch (oldest first).
+    Default window is 10 minutes — wider than the 5-min rolling window
+    so we have enough history to compute velocity immediately.
+    """
+    import time
+
+    if not SNAPSHOT_DIR.exists():
+        return []
+    cutoff = time.time() - window_seconds
+    snaps = []
+    for p in SNAPSHOT_DIR.glob("*.json"):
+        try:
+            data = json.loads(p.read_text())
+            if data.get("epoch", 0) >= cutoff:
+                snaps.append(data)
+        except (json.JSONDecodeError, OSError):
+            continue
+    snaps.sort(key=lambda s: s.get("epoch", 0))
+    return snaps
+
+
+def load_velocity_history() -> list[tuple[str, float]]:
+    """Load (HH:MM, copies_per_min) from all snapshots on disk.
+
+    Returns chronologically sorted list. Skips snapshots without velocity data.
+    """
+    if not SNAPSHOT_DIR.exists():
+        return []
+    snaps = []
+    for p in SNAPSHOT_DIR.glob("*.json"):
+        try:
+            snaps.append(json.loads(p.read_text()))
+        except (json.JSONDecodeError, OSError):
+            continue
+    snaps.sort(key=lambda s: s.get("epoch", 0))
+
+    history = []
+    for snap in snaps:
+        vel = snap.get("velocity")
+        if vel is None or vel.get("copies_per_min") is None:
+            continue
+        epoch = snap.get("epoch", 0)
+        dt = datetime.fromtimestamp(epoch)
+        label = dt.strftime("%H:%M")
+        history.append((label, vel["copies_per_min"]))
+    return history
