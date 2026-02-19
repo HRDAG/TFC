@@ -26,10 +26,8 @@ from textual.widgets import Footer, Header, Static, TabbedContent, TabPane
 from tfcs_tui.data import (
     DEFAULT_CONFIG,
     NodeDataStore,
-    compute_total_copies,
     fetch_node_all,
     load_config,
-    load_recent_snapshots,
     load_tailscale_ip_map,
     load_velocity_history,
     poll_cluster,
@@ -123,10 +121,8 @@ class TfcsDashboard(App):
 
         # Snapshot persistence (real mode only)
         if not mock:
-            self._recent_snapshots = load_recent_snapshots()
             self._velocity_history = load_velocity_history()
         else:
-            self._recent_snapshots = []
             self._velocity_history = []
 
     def compose(self) -> ComposeResult:
@@ -136,7 +132,7 @@ class TfcsDashboard(App):
             with TabPane("Replication", id="tab-replication"):
                 yield ClusterOverview(self._target_copies)
                 yield ReplicationChart()
-                yield ReplicationVelocity(self._target_copies)
+                yield ReplicationVelocity()
                 yield VelocityChart()
             with TabPane("Nodes", id="tab-nodes"):
                 yield NodesTable()
@@ -152,9 +148,6 @@ class TfcsDashboard(App):
 
     def on_mount(self) -> None:
         self.action_refresh()
-        # Seed rolling window from disk snapshots for immediate velocity
-        if self._recent_snapshots:
-            self.query_one(ReplicationVelocity).seed_from_snapshots(self._recent_snapshots)
         if not self._mock:
             self.set_interval(1.0, self._poll_next_node)
 
@@ -164,22 +157,20 @@ class TfcsDashboard(App):
             from tfcs_tui.mock import (
                 HEARTBEAT_AGE,
                 HEARTBEAT_MATRIX,
+                MOCK_VELOCITY,
                 MOCK_VELOCITY_HISTORY,
                 NODE_STATUS,
                 REPLICATION,
                 STATUSES,
                 TRAFFIC_REPORTS,
-                make_mock_snapshots,
             )
             # Populate the datastore
             for s in STATUSES:
                 self._store.update_node(s["node_id"], status=s, traffic=None)
             for r in TRAFFIC_REPORTS:
                 self._store.update_node(r["node_id"], status=None, traffic=r)
-            self._store.update_global(NODE_STATUS, HEARTBEAT_AGE, REPLICATION, HEARTBEAT_MATRIX)
-
-            # Seed velocity rolling window with mock snapshots
-            self.query_one(ReplicationVelocity).seed_from_snapshots(make_mock_snapshots())
+            self._store.update_global(NODE_STATUS, HEARTBEAT_AGE, REPLICATION, HEARTBEAT_MATRIX,
+                                      velocity=MOCK_VELOCITY)
 
             # Set velocity history for chart
             self._velocity_history = list(MOCK_VELOCITY_HISTORY)
@@ -188,7 +179,7 @@ class TfcsDashboard(App):
         else:
             # Full burst refresh using existing poll functions
             async def do_full_refresh():
-                statuses, node_status, heartbeat_age, replication = await poll_cluster(
+                statuses, node_status, heartbeat_age, replication, velocity = await poll_cluster(
                     self._peer_hosts, self._http_port, self._target_copies
                 )
                 traffic_reports = await poll_traffic_matrix(
@@ -207,7 +198,8 @@ class TfcsDashboard(App):
                         # Merge with existing node or create new
                         self._store.update_node(node_id, None, traffic)
 
-                self._store.update_global(node_status, heartbeat_age, replication)
+                self._store.update_global(node_status, heartbeat_age, replication,
+                                          velocity=velocity)
                 self.post_message(NodeUpdated(updated_node="refresh"))
 
             self.run_worker(do_full_refresh, exclusive=False)
@@ -231,7 +223,7 @@ class TfcsDashboard(App):
         import aiohttp
 
         async with aiohttp.ClientSession() as session:
-            status, traffic, nodes_list, replication = await fetch_node_all(
+            status, traffic, nodes_list, replication, velocity = await fetch_node_all(
                 session, host, self._http_port, include_global, self._target_copies
             )
 
@@ -262,7 +254,8 @@ class TfcsDashboard(App):
                 from tfcs_tui.data import fetch_heartbeat_matrix
                 hb_matrix = await fetch_heartbeat_matrix(self._peer_hosts, self._http_port, session)
 
-                self._store.update_global(node_status, heartbeat_age, replication, hb_matrix)
+                self._store.update_global(node_status, heartbeat_age, replication, hb_matrix,
+                                          velocity=velocity)
 
             self.post_message(NodeUpdated(updated_node=node_id))
 
@@ -273,26 +266,37 @@ class TfcsDashboard(App):
 
         # --- Replication tab (Tab 1) ---
         self.query_one(ReplicationChart).refresh_data(store.replication, self._target_copies)
-        velocity_widget = self.query_one(ReplicationVelocity)
-        velocity_widget.refresh_data(store.replication, timestamp=time.time())
 
-        # Velocity chart: feed accumulated history
-        vel_data = velocity_widget.get_velocity_for_snapshot()
+        # Server-supplied velocity (from /replication?window=N)
+        vel = store.velocity
+        self.query_one(ReplicationVelocity).refresh_data(vel)
 
-        # Feed overview with velocity data from the velocity widget
+        # Build vel_data for ClusterOverview: server velocity + TUI-computed ETA
+        vel_data: dict | None = None
+        if vel is not None:
+            cpm = vel.get("copies_per_min", 0)
+            if 0 < cpm <= 5.0:
+                repl = store.replication
+                target = self._target_copies
+                below_target_copies = sum(k * v for k, v in repl.items() if k < target)
+                below_target_count = sum(v for k, v in repl.items() if k < target)
+                eta_min = None
+                if below_target_count > 0:
+                    copies_needed = target * below_target_count - below_target_copies
+                    eta_min = round(copies_needed / cpm, 1)
+                vel_data = {**vel, "eta_satisfied_min": eta_min}
+
         self.query_one(ClusterOverview).refresh_data(
             store.replication, store.node_status, vel_data,
         )
 
         if not self._mock and vel_data is not None:
-            # Save snapshot to disk (rate-limited internally to 1/min)
-            save_snapshot(store.replication, vel_data, time.time())
-            # Append to in-memory history for chart
             from datetime import datetime
+            save_snapshot(store.replication, vel_data, time.time())
             label = datetime.now().strftime("%H:%M")
-            # Avoid duplicate labels for same minute
+            cpm = vel_data["copies_per_min"]
             if not self._velocity_history or self._velocity_history[-1][0] != label:
-                self._velocity_history.append((label, vel_data["copies_per_min"]))
+                self._velocity_history.append((label, cpm))
 
         self.query_one(VelocityChart).refresh_data(self._velocity_history)
 

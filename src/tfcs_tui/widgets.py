@@ -33,7 +33,7 @@ class ReplicationChart(Static):
 
     def __init__(self) -> None:
         super().__init__()
-        self._prev_bins: dict[int, int] = {}
+        self._snapshots: list[tuple[float, dict[int, int]]] = []  # (monotonic_ts, bins)
 
     def refresh_data(
         self, repl: dict[int, int], target_copies: int,
@@ -60,6 +60,15 @@ class ReplicationChart(Static):
         title = f"replication ({total} commits, target: {target_copies} copies)"
         lines.append(Text(f"  {title}", style="bold"))
 
+        # Find reference bins from ~60s ago for persistent arrows
+        import time
+        now = time.monotonic()
+        ref_bins = bins  # Default: no arrows if no old snapshot yet
+        for ts, snap in reversed(self._snapshots):
+            if now - ts >= 60:
+                ref_bins = snap
+                break
+
         for copies in [1, 2, 3, 4]:
             count = bins[copies]
             if copies == 4:
@@ -81,8 +90,8 @@ class ReplicationChart(Static):
             else:
                 style = "green"
 
-            # Change indicator
-            prev_count = self._prev_bins.get(copies, count)
+            # Change indicator based on 60s reference
+            prev_count = ref_bins.get(copies, count)
             if count > prev_count:
                 indicator = Text(" ↑", style="green")
             elif count < prev_count:
@@ -100,8 +109,9 @@ class ReplicationChart(Static):
         group = Text("\n").join(lines)
         self.update(group)
 
-        # Save current bins for next refresh comparison
-        self._prev_bins = bins.copy()
+        # Append current snapshot; trim to 120s window
+        self._snapshots.append((now, bins.copy()))
+        self._snapshots = [(ts, snap) for ts, snap in self._snapshots if now - ts <= 120]
 
 
 # ---------------------------------------------------------------------------
@@ -171,7 +181,7 @@ class ClusterOverview(Static):
 # ---------------------------------------------------------------------------
 
 class ReplicationVelocity(Static):
-    """Track replication progress over 5-minute rolling window."""
+    """Replication velocity from server /replication?window=N endpoint."""
 
     DEFAULT_CSS = """
     ReplicationVelocity {
@@ -182,171 +192,39 @@ class ReplicationVelocity(Static):
     }
     """
 
-    def __init__(self, target_copies: int = 3) -> None:
+    def __init__(self) -> None:
         super().__init__()
-        self._target = target_copies
-        self._history: list[tuple[float, dict[int, int]]] = []  # (timestamp, distribution)
-        self._window_seconds = 300.0  # 5 minutes
 
-    def seed_from_snapshots(self, snapshots: list[dict]) -> None:
-        """Seed rolling window from disk snapshots for immediate velocity."""
-        for snap in snapshots:
-            epoch = snap.get("epoch")
-            histogram = snap.get("histogram", {})
-            if epoch is None or not histogram:
-                continue
-            hist = {int(k): v for k, v in histogram.items()}
-            self._history.append((epoch, hist))
-        self._history.sort(key=lambda x: x[0])
-
-    def get_velocity_for_snapshot(self) -> dict | None:
-        """Return current velocity data formatted for disk snapshot.
-
-        Note: minimum elapsed is 60s here (vs 180s for display in refresh_data).
-        The display threshold is more conservative to avoid showing noisy readings.
-        The snapshot threshold is lower so we start persisting data sooner —
-        the snapshot data feeds the velocity-over-time chart, not the live display.
-        """
-        if len(self._history) < 2:
-            return None
-        oldest_ts, oldest_dist = self._history[0]
-        newest_ts, newest_dist = self._history[-1]
-        elapsed = newest_ts - oldest_ts
-        if elapsed < 60:
-            return None
-        oldest_total = compute_total_copies(oldest_dist)
-        newest_total = compute_total_copies(newest_dist)
-        new_copies = max(0, newest_total - oldest_total)
-        cpm = new_copies / (elapsed / 60) if elapsed > 0 else 0.0
-        # Per-bucket transitions (string keys for JSON compat)
-        transitions = {}
-        all_keys = sorted(set(oldest_dist.keys()) | set(newest_dist.keys()))
-        for k in all_keys:
-            diff = newest_dist.get(k, 0) - oldest_dist.get(k, 0)
-            if diff != 0:
-                transitions[str(k)] = diff
-        # ETA
-        target = self._target
-        below_target_copies = sum(k * v for k, v in newest_dist.items() if k < target)
-        below_target_count = sum(v for k, v in newest_dist.items() if k < target)
-        if below_target_count > 0 and cpm > 0:
-            copies_needed = target * below_target_count - below_target_copies
-            eta_min = round(copies_needed / cpm, 1)
-        else:
-            eta_min = None
-        return {
-            "delta_seconds": round(elapsed, 1),
-            "new_copies": new_copies,
-            "copies_per_min": round(cpm, 1),
-            "transitions": transitions,
-            "eta_satisfied_min": eta_min,
-        }
-
-    def refresh_data(self, repl: dict[int, int], timestamp: float | None = None) -> None:
-        """Update with new replication snapshot."""
-        import time
-        if timestamp is None:
-            timestamp = time.time()
-
-        # Skip empty/unpopulated data (during startup before first global poll)
-        if not repl or sum(repl.values()) == 0:
-            self.update(Text("(waiting for data...)", style="dim"))
+    def refresh_data(self, velocity: dict | None) -> None:
+        """Display server-computed velocity data."""
+        if velocity is None:
+            self.update(Text("(waiting for velocity data...)", style="dim"))
             return
 
-        # Add current snapshot to history
-        self._history.append((timestamp, dict(repl)))
+        cpm = velocity.get("copies_per_min", 0)
+        new_copies = velocity.get("new_copies", 0)
+        window_min = velocity.get("window_minutes", 10)
+        bytes_per_min = velocity.get("bytes_per_min", 0)
+        by_source = velocity.get("by_source", {})
 
-        # Prune snapshots older than window
-        cutoff = timestamp - self._window_seconds
-        self._history = [(ts, dist) for ts, dist in self._history if ts >= cutoff]
-
-        # Need at least 2 snapshots to calculate velocity
-        if len(self._history) < 2:
-            self.update(Text("(waiting for data...)", style="dim"))
-            return
-
-        # Calculate deltas between oldest and newest
-        oldest_ts, oldest_dist = self._history[0]
-        newest_ts, newest_dist = self._history[-1]
-        elapsed_sec = newest_ts - oldest_ts
-
-        if elapsed_sec < 60:  # Less than 1 minute of data
-            self.update(Text("(smoothing velocity data...)", style="dim"))
-            return
-
-        # Weighted total copies velocity (G-Set: only increases)
-        oldest_total = compute_total_copies(oldest_dist)
-        newest_total = compute_total_copies(newest_dist)
-        new_copies = max(0, newest_total - oldest_total)
-
-        # Convert to per-minute rate
-        elapsed_min = elapsed_sec / 60.0
-        copies_per_min = new_copies / elapsed_min if elapsed_min > 0 else 0.0
-
-        window_min = int(elapsed_sec / 60)
-        target = self._target
         lines = []
-        # Per-bucket breakdown — all buckets in one block
-        # Buckets below target, then the target bucket (highest key)
-        all_buckets = sorted(newest_dist.keys())
-        for copies in all_buckets:
-            if copies == 0:
-                continue  # skip 0-copy bucket
-            old_count = oldest_dist.get(copies, 0)
-            new_count = newest_dist.get(copies, 0)
-            delta = new_count - old_count
-            rate = delta / elapsed_min if elapsed_min > 0 else 0
-
-            at_target = copies >= target
-            style = "green" if at_target else ""
-
-            line = Text()
-            if copies == 1:
-                line.append(f"  1 copy:   {new_count:>4}", style=style)
-            else:
-                line.append(f"  {copies} copies: {new_count:>4}", style=style)
-
-            # Show delta and rate
-            if abs(delta) > 0:
-                sign = "+" if delta > 0 else ""
-                line.append(f"  ({sign}{delta} in {window_min}m = ", style="dim")
-                if abs(rate) >= 0.1:
-                    line.append(f"{rate:+.1f}/min)", style="dim")
-                else:
-                    line.append("~0/min)", style="dim")
-            else:
-                line.append("  (---)", style="dim")
-
-            lines.append(line)
-
-        # Net velocity (weighted total_copies math)
-        lines.append(Text())
-        net_text = Text()
-        if copies_per_min >= 0.1:
-            net_text.append(f"+{copies_per_min:.1f} copies/min", style="green")
+        vel_text = Text()
+        if cpm >= 0.1:
+            vel_text.append(f"+{cpm:.1f} copies/min", style="green")
         else:
-            net_text.append("STALLED", style="yellow")
-        lines.append(net_text)
+            vel_text.append("STALLED", style="yellow")
+        vel_text.append(f"  ({new_copies} new in {window_min}m window)", style="dim")
+        if bytes_per_min > 0:
+            bw_str = humanize.naturalsize(bytes_per_min / 60, binary=False, format="%.1f") + "/s"
+            vel_text.append(f"  ~{bw_str}", style="dim")
+        lines.append(vel_text)
 
-        # ETA display
-        below_target_copies = sum(copies * count for copies, count in newest_dist.items() if copies < target)
-        below_target_count = sum(count for copies, count in newest_dist.items() if copies < target)
-        if below_target_count > 0 and copies_per_min > 0:
-            copies_needed = target * below_target_count - below_target_copies
-            eta_min = copies_needed / copies_per_min
-        else:
-            eta_min = None
-
-        if eta_min is not None:
-            if eta_min < 60:
-                eta_style = "bold green"
-            elif eta_min < 240:
-                eta_style = "bold yellow"
-            else:
-                eta_style = "bold yellow"
-            eta_text = Text()
-            eta_text.append(f"ETA to target: ~{eta_min:.0f} min ({eta_min/60:.1f} hr)", style=eta_style)
-            lines.append(eta_text)
+        if by_source:
+            for node_fqdn, count in sorted(by_source.items(), key=lambda x: -x[1]):
+                src_text = Text()
+                src_text.append(f"  {short(node_fqdn):<10}", style="")
+                src_text.append(f"{count:>3} copies", style="dim")
+                lines.append(src_text)
 
         self.update(Text("\n").join(lines))
 
@@ -435,13 +313,12 @@ class NodesTable(DataTable):
         self.add_column("Status", width=7, key="status")
         self.add_column("HB", width=4, key="hb")
         self.add_column("Uptime", width=9, key="uptime")
-        self.add_column("Ver", width=5, key="ver")
+        self.add_column("Ver", width=7, key="ver")
         self.add_column("Seq", width=5, key="seq")
         self.add_column("Store", width=5, key="store")
         self.add_column("Free", width=7, key="free")
         self.add_column("Peers", width=5, key="peers")
         self.add_column("Pulls", width=5, key="pulls")
-        self.add_column("Flags", width=5, key="flags")
         self.cursor_type = "none"
 
         # Center all column headers
@@ -455,7 +332,6 @@ class NodesTable(DataTable):
         self.columns["free"].content_align = ("right", "middle")
         self.columns["peers"].content_align = ("right", "middle")
         self.columns["pulls"].content_align = ("right", "middle")
-        self.columns["flags"].content_align = ("left", "middle")
 
     def refresh_data(
         self, statuses: list[dict], node_status: dict[str, str],
@@ -487,12 +363,6 @@ class NodesTable(DataTable):
             )
             free_style = "red bold" if free_gb < 50 else ""
 
-            # IDLE flag: node wants to pull but has no active pulls
-            wants = s.get("wants_count", 0)
-            haves = s.get("haves_count", 0)
-            queue = max(0, wants - haves)
-            idle = pulls == 0 and queue > 0
-
             self.add_row(
                 short(nid),
                 s.get("cluster", "?"),
@@ -506,7 +376,6 @@ class NodesTable(DataTable):
                 Text(free_str, style=free_style, justify="right"),
                 Text(peers, justify="right"),
                 Text(pull_str, justify="right"),
-                Text("IDLE", style="yellow bold") if idle else Text(""),
             )
 
 
@@ -587,6 +456,12 @@ class VelocityChart(Static):
         if len(history) > 60:
             history = history[-60:]
 
+        # Filter artifactual readings (copies/min was never > 5 in practice)
+        history = [(t, v) for t, v in history if v <= 5.0]
+        if len(history) < 2:
+            self.update(Text("Velocity chart: collecting data...", style="dim"))
+            return
+
         values = [v for _, v in history]
         v_max = max(values)
         v_min = 0  # Always anchor at 0
@@ -595,8 +470,9 @@ class VelocityChart(Static):
         blocks = " ▁▂▃▄▅▆▇█"
         v_range = v_max if v_max > 0 else 1.0
 
+        current_val = values[-1]
         lines = []
-        lines.append(Text(f"Velocity (copies/min)  max: {v_max:.1f}", style="bold"))
+        lines.append(Text(f"Velocity (copies/min)  current: {current_val:.1f}  max: {v_max:.1f}", style="bold"))
 
         # Build sparkline rows (4 rows high for resolution)
         height = 4

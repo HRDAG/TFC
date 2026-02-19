@@ -378,6 +378,22 @@ HEARTBEAT_MATRIX = {
 }
 
 # ---------------------------------------------------------------------------
+# Velocity mock data (for ReplicationVelocity widget)
+# ---------------------------------------------------------------------------
+
+MOCK_VELOCITY = {
+    "window_minutes": 10,
+    "new_copies": 12,
+    "copies_per_min": 7.8,
+    "bytes_per_min": 1_500_000_000,
+    "by_source": {
+        "chll.hrdag.net": 4,
+        "lizo.hrdag.net": 3,
+        "scott.hrdag.net": 3,
+        "snowball.hrdag.net": 2,
+    },
+}
+
 # Velocity history mock data (for VelocityChart)
 # ---------------------------------------------------------------------------
 
