@@ -141,10 +141,11 @@ class ClusterOverview(Static):
     ) -> None:
         """Update overview from current cluster state."""
         target = self._target
-        total_commits = sum(replication.values())
+        zero_copy = replication.get(0, 0)
+        total_commits = sum(v for k, v in replication.items() if k > 0)
         total_copies = compute_total_copies(replication)
         satisfied = sum(v for k, v in replication.items() if k >= target)
-        unsatisfied = sum(v for k, v in replication.items() if k < target)
+        unsatisfied = sum(v for k, v in replication.items() if 0 < k < target)
         sat_pct = round(satisfied / total_commits * 100, 1) if total_commits else 0.0
 
         n_nodes = len(node_status)
@@ -172,6 +173,11 @@ class ClusterOverview(Static):
             if eta is not None:
                 vel_text.append(f"  ETA: ~{eta:.0f} min ({eta/60:.1f} hr)", style="yellow")
             lines.append(vel_text)
+
+        if zero_copy > 0:
+            zc_text = Text()
+            zc_text.append(f"+{zero_copy} with no copies, may need investigation", style="yellow")
+            lines.append(zc_text)
 
         self.update(Text("\n").join(lines))
 
