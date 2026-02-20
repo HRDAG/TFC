@@ -38,11 +38,10 @@ class ReplicationChart(Static):
     def refresh_data(
         self, repl: dict[int, int], target_copies: int,
     ) -> None:
-        # Always show 1,2,3,4+ bins (no 0 - there are no 0-copy commits)
-        bins = {1: 0, 2: 0, 3: 0, 4: 0}
+        bins = {0: 0, 1: 0, 2: 0, 3: 0, 4: 0}
         for copies, count in repl.items():
             if copies == 0:
-                continue  # Skip 0-copy commits
+                bins[0] = count
             elif copies < 4:
                 bins[copies] = count
             else:
@@ -69,9 +68,11 @@ class ReplicationChart(Static):
                 ref_bins = snap
                 break
 
-        for copies in [1, 2, 3, 4]:
+        for copies in [0, 1, 2, 3, 4]:
             count = bins[copies]
-            if copies == 4:
+            if copies == 0:
+                label = "0 copies"
+            elif copies == 4:
                 label = "4+ copies"
             elif copies == 1:
                 label = "1 copy"
@@ -80,8 +81,10 @@ class ReplicationChart(Static):
             filled = int(count / max_count * bar_width) if max_count else 0
             bar_str = "\u2588" * filled
 
-            # Color scheme: 1=red, 2=yellow, 3=orange, 4+=green
-            if copies == 1:
+            # Color scheme: 0=bold red, 1=red, 2=yellow, 3=orange, 4+=green
+            if copies == 0:
+                style = "bold red"
+            elif copies == 1:
                 style = "red"
             elif copies == 2:
                 style = "yellow"
