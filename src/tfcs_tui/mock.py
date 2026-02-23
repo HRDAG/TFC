@@ -40,6 +40,7 @@ STATUSES = [
         "version": "0.2.6",
         "capacity_gb": 2000.0,
         "free_gb": 1800.0,
+        "sole_holder_count": 50,
         "claims": [{"commit": "547652abcdef", "source": "scott.hrdag.net",
                     "size": 52_428_800, "bytes_transmitted": 31_457_280,
                     "rate_mbps": 8.5}],
@@ -171,6 +172,13 @@ REPLICATION = {
     1: 120,
     2: 80,
     3: 43,
+}
+
+SITE_DISTRIBUTION = {
+    1: 20,   # 20 commits on only 1 site — alarm state
+    2: 60,
+    3: 80,
+    4: 43,
 }
 
 # ---------------------------------------------------------------------------

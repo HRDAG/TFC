@@ -33,11 +33,78 @@ class ReplicationChart(Static):
 
     def __init__(self) -> None:
         super().__init__()
-        self._snapshots: list[tuple[float, dict[int, int]]] = []  # (monotonic_ts, bins)
+        # Per-bin change tracking: bin -> (monotonic_ts, "↑"/"↓")
+        # Arrow shows for 60s from when the change was first detected.
+        self._prev_node_bins: dict[int, int] = {}
+        self._prev_site_bins: dict[int, int] = {}
+        self._node_bin_changes: dict[int, tuple[float, str]] = {}
+        self._site_bin_changes: dict[int, tuple[float, str]] = {}
+
+    def _render_histogram(
+        self,
+        bins: dict[int, int],
+        labels: dict[int, str],
+        styles: dict[int, str],
+        bin_changes: dict[int, tuple[float, str]],
+        now: float,
+        bar_width: int = 40,
+        alarm_bins: set[int] | None = None,
+    ) -> list[Text]:
+        """Render one histogram block, returning list of Text lines."""
+        max_count = max(bins.values()) if bins else 1
+        lines = []
+        for b in sorted(bins):
+            count = bins[b]
+            label = labels[b]
+            style = styles[b]
+            filled = int(count / max_count * bar_width) if max_count else 0
+            bar_str = "\u2588" * filled
+
+            last_change = bin_changes.get(b)
+            if last_change and now - last_change[0] <= 60:
+                indicator = Text(f" {last_change[1]}",
+                                 style="green" if last_change[1] == "↑" else "red")
+            else:
+                indicator = Text("")
+
+            suffix = Text()
+            suffix.append(f"  {count:>5}")
+            if alarm_bins and b in alarm_bins and count > 0:
+                suffix.append("  !!", style="bold red")
+            suffix.append(indicator)
+
+            line = Text()
+            line.append(f"{label:>10}  ", style="")
+            line.append(bar_str, style=style)
+            line.append(suffix)
+            lines.append(line)
+        return lines
+
+    def _update_changes(
+        self,
+        bins: dict[int, int],
+        prev_bins: dict[int, int],
+        bin_changes: dict[int, tuple[float, str]],
+        now: float,
+    ) -> None:
+        """Update per-bin change tracking in place."""
+        for b, count in bins.items():
+            prev = prev_bins.get(b, count)
+            if count > prev:
+                bin_changes[b] = (now, "↑")
+            elif count < prev:
+                bin_changes[b] = (now, "↓")
 
     def refresh_data(
-        self, repl: dict[int, int], target_copies: int,
+        self,
+        repl: dict[int, int],
+        target_copies: int,
+        site_dist: dict[int, int] | None = None,
     ) -> None:
+        import time
+        now = time.monotonic()
+
+        # --- Node copies histogram ---
         bins = {0: 0, 1: 0, 2: 0, 3: 0, 4: 0}
         for copies, count in repl.items():
             if copies == 0:
@@ -52,69 +119,45 @@ class ReplicationChart(Static):
             self.update(Text("replication: no data", style="dim"))
             return
 
-        max_count = max(bins.values())
-        bar_width = 40
+        self._update_changes(bins, self._prev_node_bins, self._node_bin_changes, now)
+        self._prev_node_bins = bins.copy()
+
+        node_labels = {0: "0 copies", 1: "1 copy", 2: "2 copies", 3: "3 copies", 4: "4+ copies"}
+        node_styles = {0: "bold red", 1: "red", 2: "yellow", 3: "bright_yellow", 4: "green"}
+
         lines = []
-
-        title = f"replication ({total} commits, target: {target_copies} copies)"
+        title = f"replication ({total} commits, target: {target_copies} copies) — node copies"
         lines.append(Text(f"  {title}", style="bold"))
+        lines.extend(self._render_histogram(
+            bins, node_labels, node_styles, self._node_bin_changes, now,
+            alarm_bins={0},
+        ))
 
-        # Find reference bins from ~60s ago for persistent arrows
-        import time
-        now = time.monotonic()
-        ref_bins = bins  # Default: no arrows if no old snapshot yet
-        for ts, snap in reversed(self._snapshots):
-            if now - ts >= 60:
-                ref_bins = snap
-                break
+        # --- Site distribution histogram ---
+        if site_dist:
+            site_bins = {1: 0, 2: 0, 3: 0, 4: 0}
+            for sites, count in site_dist.items():
+                if sites <= 1:
+                    site_bins[1] += count
+                elif sites < 4:
+                    site_bins[sites] = count
+                else:
+                    site_bins[4] += count
 
-        for copies in [0, 1, 2, 3, 4]:
-            count = bins[copies]
-            if copies == 0:
-                label = "0 copies"
-            elif copies == 4:
-                label = "4+ copies"
-            elif copies == 1:
-                label = "1 copy"
-            else:
-                label = f"{copies} copies"
-            filled = int(count / max_count * bar_width) if max_count else 0
-            bar_str = "\u2588" * filled
+            self._update_changes(site_bins, self._prev_site_bins, self._site_bin_changes, now)
+            self._prev_site_bins = site_bins.copy()
 
-            # Color scheme: 0=bold red, 1=red, 2=yellow, 3=orange, 4+=green
-            if copies == 0:
-                style = "bold red"
-            elif copies == 1:
-                style = "red"
-            elif copies == 2:
-                style = "yellow"
-            elif copies == 3:
-                style = "bright_yellow"  # orange-ish
-            else:
-                style = "green"
+            site_labels = {1: "1 site", 2: "2 sites", 3: "3 sites", 4: "4+ sites"}
+            site_styles = {1: "bold red", 2: "yellow", 3: "bright_yellow", 4: "green"}
 
-            # Change indicator based on 60s reference
-            prev_count = ref_bins.get(copies, count)
-            if count > prev_count:
-                indicator = Text(" ↑", style="green")
-            elif count < prev_count:
-                indicator = Text(" ↓", style="red")
-            else:
-                indicator = Text("")
+            lines.append(Text(""))
+            lines.append(Text("  site copies (target: ≥2 sites)", style="bold"))
+            lines.extend(self._render_histogram(
+                site_bins, site_labels, site_styles, self._site_bin_changes, now,
+                alarm_bins={1},
+            ))
 
-            line = Text()
-            line.append(f"{label:>10}  ", style="")
-            line.append(bar_str, style=style)
-            line.append(f"  {count:>5}")
-            line.append(indicator)
-            lines.append(line)
-
-        group = Text("\n").join(lines)
-        self.update(group)
-
-        # Append current snapshot; trim to 120s window
-        self._snapshots.append((now, bins.copy()))
-        self._snapshots = [(ts, snap) for ts, snap in self._snapshots if now - ts <= 120]
+        self.update(Text("\n").join(lines))
 
 
 # ---------------------------------------------------------------------------
@@ -139,8 +182,12 @@ class ClusterOverview(Static):
         self._target = target_copies
 
     def refresh_data(
-        self, replication: dict[int, int], node_status: dict[str, str],
+        self,
+        replication: dict[int, int],
+        node_status: dict[str, str],
         velocity_data: dict | None = None,
+        site_dist: dict[int, int] | None = None,
+        sole_holder_nodes: dict[str, int] | None = None,
     ) -> None:
         """Update overview from current cluster state."""
         target = self._target
@@ -156,14 +203,26 @@ class ClusterOverview(Static):
         lines = []
         # Line 1: node count + total copies
         lines.append(Text(f"{n_nodes} nodes, {total_copies:,} total copies across {total_commits:,} commits", style="bold"))
-        # Line 2: satisfied / unsatisfied
+        # Line 2: node-satisfied / unsatisfied
         sat_text = Text()
-        sat_text.append(f"Satisfied (>={target} copies): ", style="")
+        sat_text.append(f"Node-satisfied (>={target} copies): ", style="")
         sat_text.append(f"{satisfied:,} ({sat_pct}%)", style="green")
         sat_text.append(f"  Unsatisfied: ", style="")
         sat_text.append(f"{unsatisfied:,}", style="yellow" if unsatisfied > 0 else "green")
         lines.append(sat_text)
-        # Line 3: velocity + ETA (compact)
+        # Line 3: site distribution
+        if site_dist:
+            site_total = sum(site_dist.values())
+            single_site = site_dist.get(1, 0)
+            multi_site = site_total - single_site
+            multi_pct = round(multi_site / site_total * 100, 1) if site_total else 0.0
+            site_text = Text()
+            site_text.append("Site-distributed (≥2 sites): ", style="")
+            site_text.append(f"{multi_site:,} ({multi_pct}%)", style="green")
+            site_text.append("  Single-site: ", style="")
+            site_text.append(str(single_site), style="red bold" if single_site > 0 else "green")
+            lines.append(site_text)
+        # Line 4: velocity + ETA (compact)
         if velocity_data is not None:
             cpm = velocity_data.get("copies_per_min", 0)
             eta = velocity_data.get("eta_satisfied_min")
@@ -176,11 +235,17 @@ class ClusterOverview(Static):
             if eta is not None:
                 vel_text.append(f"  ETA: ~{eta:.0f} min ({eta/60:.1f} hr)", style="yellow")
             lines.append(vel_text)
-
+        # Warnings
         if zero_copy > 0:
             zc_text = Text()
             zc_text.append(f"+{zero_copy} with no copies, may need investigation", style="yellow")
             lines.append(zc_text)
+        if sole_holder_nodes:
+            sole_text = Text()
+            sole_text.append("!! Sole holders: ", style="red bold")
+            parts = [f"{node} {count:,}" for node, count in sorted(sole_holder_nodes.items(), key=lambda x: -x[1])]
+            sole_text.append("  ".join(parts), style="red")
+            lines.append(sole_text)
 
         self.update(Text("\n").join(lines))
 
@@ -371,9 +436,11 @@ class NodesTable(DataTable):
                 else "red"
             )
             free_style = "red bold" if free_gb < 50 else ""
+            sole_count = s.get("sole_holder_count", 0)
+            node_cell = Text(short(nid), style="red bold" if sole_count > 0 else "")
 
             self.add_row(
-                short(nid),
+                node_cell,
                 s.get("cluster", "?"),
                 s.get("node_class", "?"),
                 Text(status, style=status_style),
@@ -465,8 +532,8 @@ class VelocityChart(Static):
         if len(history) > 60:
             history = history[-60:]
 
-        # Filter artifactual readings (copies/min was never > 5 in practice)
-        history = [(t, v) for t, v in history if v <= 5.0]
+        # Filter negative readings (corrupted data)
+        history = [(t, v) for t, v in history if v >= 0]
         if len(history) < 2:
             self.update(Text("Velocity chart: collecting data...", style="dim"))
             return

@@ -78,9 +78,12 @@ async def fetch_replication(
         ) as resp:
             if resp.status == 200:
                 data = await resp.json()
-                dist = {int(k): v for k, v in data.get("distribution", {}).items()}
+                local = data.get("local", data)  # v0.6+ nests under "local"; older = top-level
+                dist = {int(k): v for k, v in local.get("distribution", {}).items()}
+                site_dist = {int(k): v for k, v in local.get("site_distribution", {}).items()}
+                sole_holders = local.get("sole_holder_count", 0)
                 velocity = data.get("velocity")  # None if endpoint doesn't support it yet
-                return dist, velocity
+                return dist, velocity, site_dist, sole_holders
     except (aiohttp.ClientError, asyncio.TimeoutError, OSError):
         pass
     return None
@@ -92,15 +95,17 @@ async def fetch_replication(
 
 async def poll_cluster(
     peer_hosts: list[str], http_port: int, target_copies: int,
-) -> tuple[list[dict], dict[str, str], dict[str, float], dict[int, int], dict | None]:
+) -> tuple[list[dict], dict[str, str], dict[str, float], dict[int, int], dict | None, dict[int, int], int]:
     """Poll /status, /nodes, and /replication from all peers.
 
-    Returns (statuses, node_status, heartbeat_age, replication) where:
+    Returns (statuses, node_status, heartbeat_age, replication, velocity, site_dist, sole_holders) where:
       statuses       = list of /status response dicts (one per responding peer)
       node_status    = {node_id: "alive"|"suspect"|"dead"|"unreachable"}
       heartbeat_age  = {node_id: heartbeat_age_seconds}
       replication    = {copies: count} histogram (empty if endpoint unavailable)
       velocity       = server-computed velocity dict or None
+      site_dist      = {sites: count} histogram from /replication local.site_distribution
+      sole_holders   = cluster-level sole_holder_count from /replication
     """
     async with aiohttp.ClientSession() as session:
         # Fetch /status from all peers concurrently
@@ -121,12 +126,14 @@ async def poll_cluster(
         # Fetch /replication from first responding peer
         replication: dict[int, int] = {}
         velocity: dict | None = None
+        site_dist: dict[int, int] = {}
+        sole_holders: int = 0
         for host in peer_hosts:
             result = await fetch_replication(
                 session, host, http_port, target_copies,
             )
             if result is not None:
-                replication, velocity = result
+                replication, velocity, site_dist, sole_holders = result
                 break
 
         # Mark peers that didn't respond to /status as unreachable
@@ -135,7 +142,7 @@ async def poll_cluster(
             if nid not in responding_ids:
                 node_status[nid] = "unreachable"
 
-    return statuses, node_status, heartbeat_age, replication, velocity
+    return statuses, node_status, heartbeat_age, replication, velocity, site_dist, sole_holders
 
 
 # ---------------------------------------------------------------------------
@@ -248,13 +255,13 @@ async def fetch_node_all(
     http_port: int,
     include_global: bool = False,
     target_copies: int = 3,
-) -> tuple[dict | None, dict | None, list[dict] | None, dict[int, int] | None, dict | None]:
+) -> tuple[dict | None, dict | None, list[dict] | None, dict[int, int] | None, dict | None, dict[int, int], int]:
     """Fetch /status and /traffic from a single node.
 
     If include_global is True, also fetch /nodes and /replication
     (these are cluster-wide views, so only needed once per cycle).
 
-    Returns: (status, traffic, nodes_list, replication, velocity)
+    Returns: (status, traffic, nodes_list, replication, velocity, site_dist, sole_holders)
     """
     # Always fetch per-node endpoints concurrently
     status_task = fetch_status(session, host, http_port)
@@ -270,7 +277,9 @@ async def fetch_node_all(
             status_task, traffic_task, nodes_task, repl_task,
             return_exceptions=False,
         )
-        replication, velocity = repl_result if repl_result is not None else (None, None)
+        replication, velocity, site_dist, sole_holders = (
+            repl_result if repl_result is not None else (None, None, {}, 0)
+        )
     else:
         # Only fetch per-node endpoints
         status, traffic = await asyncio.gather(
@@ -280,8 +289,10 @@ async def fetch_node_all(
         nodes_list = None
         replication = None
         velocity = None
+        site_dist = {}
+        sole_holders = 0
 
-    return status, traffic, nodes_list, replication, velocity
+    return status, traffic, nodes_list, replication, velocity, site_dist, sole_holders
 
 
 # ---------------------------------------------------------------------------
@@ -358,6 +369,8 @@ class NodeDataStore:
         self._heartbeat_matrix: dict[str, dict[str, float]] = {}  # observer -> {observed -> age}
         self._cycle_count: int = 0                  # Increments each poll
         self._velocity: dict | None = None          # Server-computed velocity from /replication
+        self._site_distribution: dict[int, int] = {}   # {sites: count} from /replication
+        self._cluster_sole_holders: int = 0            # sole_holder_count from /replication
 
     def update_node(self, node_id: str, status: dict | None, traffic: dict | None) -> None:
         """Update data for a single node after polling it."""
@@ -376,7 +389,9 @@ class NodeDataStore:
                       heartbeat_age: dict[str, float],
                       replication: dict[int, int],
                       heartbeat_matrix: dict[str, dict[str, float]] | None = None,
-                      velocity: dict | None = None) -> None:
+                      velocity: dict | None = None,
+                      site_distribution: dict[int, int] | None = None,
+                      cluster_sole_holders: int = 0) -> None:
         """Update global data (from /nodes and /replication endpoints)."""
         self._node_status = node_status
         self._heartbeat_age = heartbeat_age
@@ -385,6 +400,9 @@ class NodeDataStore:
             self._heartbeat_matrix = heartbeat_matrix
         if velocity is not None:
             self._velocity = velocity
+        if site_distribution is not None:
+            self._site_distribution = site_distribution
+        self._cluster_sole_holders = cluster_sole_holders
 
         # Update per-node snapshots with status and heartbeat data
         for node_id, status in node_status.items():
@@ -444,6 +462,16 @@ class NodeDataStore:
     def velocity(self) -> dict | None:
         """Server-computed velocity from /replication?window=N endpoint."""
         return self._velocity
+
+    @property
+    def site_distribution(self) -> dict[int, int]:
+        """Site distribution histogram from /replication local.site_distribution."""
+        return self._site_distribution
+
+    @property
+    def cluster_sole_holders(self) -> int:
+        """Cluster-level sole_holder_count from /replication."""
+        return self._cluster_sole_holders
 
 
 async def fetch_heartbeat_matrix(
@@ -576,8 +604,8 @@ def load_velocity_history() -> list[tuple[str, float]]:
         if vel is None or vel.get("copies_per_min") is None:
             continue
         cpm = vel["copies_per_min"]
-        if cpm > 5.0:
-            continue  # Skip artifactual readings
+        if cpm < 0:
+            continue  # Skip negative readings (corrupted data)
         epoch = snap.get("epoch", 0)
         dt = datetime.fromtimestamp(epoch)
         label = dt.strftime("%H:%M")
