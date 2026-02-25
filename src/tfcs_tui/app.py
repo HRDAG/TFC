@@ -40,6 +40,8 @@ from tfcs_tui.widgets import (
     HeartbeatMatrix,
     LatencyHeatmap,
     NodesTable,
+    OrgNodeTable,
+    OrgsTable,
     ReplicationChart,
     ReplicationVelocity,
     SourceUtilization,
@@ -74,9 +76,10 @@ class TfcsDashboard(App):
         Binding("r", "refresh", "Refresh"),
         Binding("1", "tab_replication", "Replication", show=False),
         Binding("2", "tab_nodes", "Nodes", show=False),
-        Binding("3", "tab_traffic", "Traffic", show=False),
-        Binding("4", "tab_latency", "Latency", show=False),
-        Binding("5", "tab_heartbeats", "Heartbeats", show=False),
+        Binding("3", "tab_orgs", "Orgs", show=False),
+        Binding("4", "tab_traffic", "Traffic", show=False),
+        Binding("5", "tab_latency", "Latency", show=False),
+        Binding("6", "tab_heartbeats", "Heartbeats", show=False),
         Binding("j", "scroll_down", "Down", show=False),
         Binding("k", "scroll_up", "Up", show=False),
     ]
@@ -139,6 +142,9 @@ class TfcsDashboard(App):
                 yield NodesTable()
                 yield SourceUtilization()
                 yield TransfersTable()
+            with TabPane("Orgs", id="tab-orgs"):
+                yield OrgsTable(self._target_copies)
+                yield OrgNodeTable(self._peer_hosts)
             with TabPane("Traffic", id="tab-traffic"):
                 yield TrafficHeatmap(self._peer_hosts, self._ip_map)
             with TabPane("Latency", id="tab-latency"):
@@ -156,6 +162,7 @@ class TfcsDashboard(App):
         """Initial refresh on startup (or manual refresh with 'r' key)."""
         if self._mock:
             from tfcs_tui.mock import (
+                BY_ORG,
                 HEARTBEAT_AGE,
                 HEARTBEAT_MATRIX,
                 MOCK_VELOCITY,
@@ -173,7 +180,8 @@ class TfcsDashboard(App):
                 self._store.update_node(r["node_id"], status=None, traffic=r)
             self._store.update_global(NODE_STATUS, HEARTBEAT_AGE, REPLICATION, HEARTBEAT_MATRIX,
                                       velocity=MOCK_VELOCITY,
-                                      site_distribution=SITE_DISTRIBUTION)
+                                      site_distribution=SITE_DISTRIBUTION,
+                                      by_org=BY_ORG)
 
             # Set velocity history for chart
             self._velocity_history = list(MOCK_VELOCITY_HISTORY)
@@ -182,7 +190,7 @@ class TfcsDashboard(App):
         else:
             # Full burst refresh using existing poll functions
             async def do_full_refresh():
-                statuses, node_status, heartbeat_age, replication, velocity, site_dist, sole_holders = await poll_cluster(
+                statuses, node_status, heartbeat_age, replication, velocity, site_dist, sole_holders, by_org = await poll_cluster(
                     self._peer_hosts, self._http_port, self._target_copies
                 )
                 traffic_reports = await poll_traffic_matrix(
@@ -204,7 +212,8 @@ class TfcsDashboard(App):
                 self._store.update_global(node_status, heartbeat_age, replication,
                                           velocity=velocity,
                                           site_distribution=site_dist,
-                                          cluster_sole_holders=sole_holders)
+                                          cluster_sole_holders=sole_holders,
+                                          by_org=by_org)
                 self.post_message(NodeUpdated(updated_node="refresh"))
 
             self.run_worker(do_full_refresh, exclusive=False)
@@ -228,7 +237,7 @@ class TfcsDashboard(App):
         import aiohttp
 
         async with aiohttp.ClientSession() as session:
-            status, traffic, nodes_list, replication, velocity, site_dist, sole_holders = await fetch_node_all(
+            status, traffic, nodes_list, replication, velocity, site_dist, sole_holders, by_org = await fetch_node_all(
                 session, host, self._http_port, include_global, self._target_copies
             )
 
@@ -262,7 +271,8 @@ class TfcsDashboard(App):
                 self._store.update_global(node_status, heartbeat_age, replication, hb_matrix,
                                           velocity=velocity,
                                           site_distribution=site_dist,
-                                          cluster_sole_holders=sole_holders)
+                                          cluster_sole_holders=sole_holders,
+                                          by_org=by_org)
 
             self.post_message(NodeUpdated(updated_node=node_id))
 
@@ -322,7 +332,11 @@ class TfcsDashboard(App):
         self.query_one(SourceUtilization).refresh_data(store.statuses)
         self.query_one(TransfersTable).refresh_data(store.statuses)
 
-        # --- Heatmap tabs (Tabs 3-5, unchanged) ---
+        # --- Orgs tab (Tab 3) ---
+        self.query_one(OrgsTable).refresh_data(store.by_org)
+        self.query_one(OrgNodeTable).refresh_data(store.by_org)
+
+        # --- Heatmap tabs (Tabs 4-6) ---
         self.query_one(TrafficHeatmap).refresh_data(store.traffic_reports, message.updated_node)
         self.query_one(LatencyHeatmap).refresh_data(store.traffic_reports, message.updated_node)
         self.query_one(HeartbeatMatrix).refresh_data(store.heartbeat_matrix, message.updated_node)
@@ -341,6 +355,9 @@ class TfcsDashboard(App):
             n_nodes = len(self._store.statuses)
             n_transfers = sum(len(s.get("claims", [])) for s in self._store.statuses)
             title_bar.update(f" tfcs nodes    {n_nodes} nodes, {n_transfers} active transfers")
+        elif active_tab == "tab-orgs":
+            n_orgs = len(self._store.by_org)
+            title_bar.update(f" tfcs orgs    {n_orgs} organizations")
         elif active_tab == "tab-traffic":
             n_reporting = len(self._store.traffic_reports)
             title_bar.update(
@@ -365,6 +382,11 @@ class TfcsDashboard(App):
     def action_tab_nodes(self) -> None:
         """Switch to nodes tab."""
         self.query_one(TabbedContent).active = "tab-nodes"
+        self._update_title_bar()
+
+    def action_tab_orgs(self) -> None:
+        """Switch to orgs tab."""
+        self.query_one(TabbedContent).active = "tab-orgs"
         self._update_title_bar()
 
     def action_tab_traffic(self) -> None:

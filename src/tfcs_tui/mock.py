@@ -168,10 +168,10 @@ HEARTBEAT_AGE = {
 }
 
 REPLICATION = {
-    0: 180,
     1: 120,
     2: 80,
     3: 43,
+    4: 20,
 }
 
 SITE_DISTRIBUTION = {
@@ -179,6 +179,31 @@ SITE_DISTRIBUTION = {
     2: 60,
     3: 80,
     4: 43,
+}
+
+BY_ORG = {
+    "hrdag": {
+        "distribution": {3: 43, 4: 20},
+        "site_distribution": {2: 30, 3: 43},
+        "by_node": {
+            "scott.hrdag.net": 63,
+            "chll.hrdag.net": 55,
+            "ipfs1.hrdag.net": 48,
+            "lizo.hrdag.net": 63,
+            "pihost.hrdag.net": 30,
+            "meerkat.hrdag.net": 25,
+            "snowball.hrdag.net": 50,
+        },
+    },
+    "datacivica": {
+        "distribution": {1: 120, 2: 80},
+        "site_distribution": {1: 175, 2: 25},
+        "by_node": {
+            "lizo.hrdag.net": 200,
+            "scott.hrdag.net": 75,
+            "snowball.hrdag.net": 25,
+        },
+    },
 }
 
 # ---------------------------------------------------------------------------

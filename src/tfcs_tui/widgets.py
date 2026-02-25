@@ -104,14 +104,12 @@ class ReplicationChart(Static):
         import time
         now = time.monotonic()
 
-        # --- Node copies histogram ---
-        bins = {0: 0, 1: 0, 2: 0, 3: 0, 4: 0}
+        # --- Node copies histogram (staged-but-not-ingested not shown here) ---
+        bins = {1: 0, 2: 0, 3: 0, 4: 0}
         for copies, count in repl.items():
-            if copies == 0:
-                bins[0] = count
-            elif copies < 4:
+            if 1 <= copies < 4:
                 bins[copies] = count
-            else:
+            elif copies >= 4:
                 bins[4] += count
 
         total = sum(bins.values())
@@ -122,15 +120,15 @@ class ReplicationChart(Static):
         self._update_changes(bins, self._prev_node_bins, self._node_bin_changes, now)
         self._prev_node_bins = bins.copy()
 
-        node_labels = {0: "0 copies", 1: "1 copy", 2: "2 copies", 3: "3 copies", 4: "4+ copies"}
-        node_styles = {0: "bold red", 1: "red", 2: "yellow", 3: "bright_yellow", 4: "green"}
+        node_labels = {1: "1 copy", 2: "2 copies", 3: "3 copies", 4: "4+ copies"}
+        node_styles = {1: "red", 2: "yellow", 3: "bright_yellow", 4: "green"}
 
         lines = []
         title = f"replication ({total} commits, target: {target_copies} copies) — node copies"
         lines.append(Text(f"  {title}", style="bold"))
         lines.extend(self._render_histogram(
             bins, node_labels, node_styles, self._node_bin_changes, now,
-            alarm_bins={0},
+            alarm_bins={1},
         ))
 
         # --- Site distribution histogram ---
@@ -1127,3 +1125,123 @@ class HeartbeatMatrix(BaseHeatmap):
 
         lines.append(legend)
         return lines
+
+
+# ---------------------------------------------------------------------------
+# Orgs table (copies + site distribution per org)
+# ---------------------------------------------------------------------------
+
+class OrgsTable(DataTable):
+    """Replication breakdown by org: copies and site distribution."""
+
+    DEFAULT_CSS = """
+    OrgsTable {
+        height: auto;
+        max-height: 12;
+        margin-bottom: 1;
+    }
+    """
+
+    def __init__(self, target_copies: int = 4) -> None:
+        super().__init__()
+        self._target = target_copies
+
+    def on_mount(self) -> None:
+        self.add_column("Org", width=11, key="org")
+        self.add_column("Total", width=7, key="total")
+        self.add_column("1cp", width=6, key="cp1")
+        self.add_column("2cp", width=6, key="cp2")
+        self.add_column("3cp", width=6, key="cp3")
+        self.add_column("≥4cp", width=7, key="cp4")
+        self.add_column("1-site", width=7, key="s1")
+        self.add_column("2-site", width=7, key="s2")
+        self.add_column("3-site", width=7, key="s3")
+        self.add_column("≥4-site", width=8, key="s4")
+        self.cursor_type = "none"
+
+    def refresh_data(self, by_org: dict) -> None:
+        self.clear()
+        if not by_org:
+            return
+
+        for org in sorted(by_org):
+            org_data = by_org[org]
+            dist = org_data.get("distribution", {})
+            site_dist = org_data.get("site_distribution", {})
+
+            total = sum(dist.values())
+            cp1 = dist.get(1, 0)
+            cp2 = dist.get(2, 0)
+            cp3 = sum(v for k, v in dist.items() if k == 3)
+            cp4 = sum(v for k, v in dist.items() if k >= 4)
+
+            s1 = site_dist.get(1, 0)
+            s2 = site_dist.get(2, 0)
+            s3 = site_dist.get(3, 0)
+            s4 = sum(v for k, v in site_dist.items() if k >= 4)
+
+            def cell(n: int, style: str) -> Text:
+                return Text(f"{n:,}" if n > 0 else "--", style=style if n > 0 else "dim")
+
+            self.add_row(
+                Text(org, style="bold"),
+                Text(f"{total:,}"),
+                cell(cp1, "red bold"),
+                cell(cp2, "yellow"),
+                cell(cp3, "yellow"),
+                cell(cp4, "green"),
+                cell(s1, "red bold"),
+                cell(s2, "yellow"),
+                cell(s3, "green"),
+                cell(s4, "green"),
+            )
+
+
+# ---------------------------------------------------------------------------
+# Org × node commit count table
+# ---------------------------------------------------------------------------
+
+class OrgNodeTable(DataTable):
+    """Commit count matrix: org rows × node columns."""
+
+    DEFAULT_CSS = """
+    OrgNodeTable {
+        height: auto;
+        max-height: 8;
+        margin-bottom: 1;
+    }
+    """
+
+    def __init__(self, peer_hosts: list[str]) -> None:
+        super().__init__()
+        scott = [h for h in peer_hosts if h.startswith("scott.")]
+        others = sorted([h for h in peer_hosts if not h.startswith("scott.")])
+        self._peer_nodes = scott + others
+
+    def on_mount(self) -> None:
+        self.add_column("Org", width=11, key="org")
+        for node in self._peer_nodes:
+            name = short(node)[:6]
+            self.add_column(name, width=7, key=f"n_{short(node)}")
+        self.cursor_type = "none"
+
+    def refresh_data(self, by_org: dict) -> None:
+        self.clear()
+        if not by_org:
+            return
+
+        for org in sorted(by_org):
+            org_data = by_org[org]
+            by_node = org_data.get("by_node", {})
+            total = sum(org_data.get("distribution", {}).values())
+
+            row: list = [Text(org, style="bold")]
+            for node in self._peer_nodes:
+                count = by_node.get(node, 0)
+                if count == 0:
+                    row.append(Text("--", style="dim"))
+                else:
+                    pct = count / total if total > 0 else 0
+                    style = "green" if pct >= 0.1 else "yellow"
+                    row.append(Text(f"{count:,}", style=style))
+            self.add_row(*row)
