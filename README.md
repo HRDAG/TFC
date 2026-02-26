@@ -28,46 +28,36 @@ given Bitcoin block.
 
 ## The Network
 
-All nodes connect over a self-hosted Tailscale mesh (Headscale on `gate`).
-
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
-│                         TFC Tailnet (Headscale on gate)                  │
+│                              TFC Tailnet                                  │
 │                                                                          │
-│  ┌──────────────────────────────────┐    ┌───────────────────┐          │
-│  │         HRDAG Office             │    │   Chilliwack, BC   │          │
-│  │                                  │    │                   │          │
-│  │  scott   nas     snowball        │    │       chll        │          │
-│  │  gate    ipfs1   meerkat  pihost │    │    (archive/ZFS)  │          │
-│  └──────────────────────────────────┘    └───────────────────┘          │
+│         gate — Tailscale control plane, auth key store                   │
+│                            │                                             │
+│        ┌───────────────────┼──────────────────────────┐                 │
+│        ▼                   ▼                          ▼                 │
 │                                                                          │
-│  ┌───────────────────┐    ┌───────────────────────────────────┐         │
-│  │  DataCivica (DC)  │    │  Incoming partner nodes           │         │
-│  │       lizo        │    │  qnap_ii (II)  ant (Km0)         │         │
-│  │  (QNAP, active)   │    │  myrtle (IJLA)                   │         │
-│  └───────────────────┘    └───────────────────────────────────┘         │
-│                                                                          │
-│  ┌──────────────────────────┐    ┌──────────────────────────────────┐   │
-│  │  TechFutures (coloc.)    │    │  Future volunteer storage nodes  │   │
-│  │  kj (GPU)  ben (storage) │    │  any org, anywhere               │   │
-│  │  ← coming                │    │  open to TFC members             │   │
-│  └──────────────────────────┘    └──────────────────────────────────┘   │
+│  ┌──────────────┐  ┌─────────────────┐  ┌──────────────────────────┐   │
+│  │ HRDAG Office │  │ Chilliwack, BC  │  │  Partner nodes           │   │
+│  │              │  │                 │  │                          │   │
+│  │  scott  nas  │  │      chll       │  │  lizo (DataCivica)       │   │
+│  └──────────────┘  └─────────────────┘  │  qnap_ii (II)           │   │
+│                                          │  ant (Km0)              │   │
+│  ┌────────────────────────────────┐      │  myrtle (IJLA)          │   │
+│  │  Volunteer storage nodes       │      └──────────────────────────┘   │
+│  │                                │                                      │
+│  │  ipfs1  snowball  meerkat      │      ┌──────────────────────────┐   │
+│  │  pihost  alex                  │      │  TechFutures (coloc.)    │   │
+│  └────────────────────────────────┘      │  kj (GPU)  ben (storage) │   │
+│                                          │  ← coming                │   │
+│                                          └──────────────────────────┘   │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Node roles
-
-| Node | Class | Location | Notes |
-|------|-------|----------|-------|
-| **scott** | active | HRDAG office | Primary ingest hub, board node |
-| **nas** | storage | HRDAG office | Local NAS (ZFS), not a tfcs node |
-| **lizo** | active | DataCivica (DC) | DC ingest + storage, QNAP |
-| **chll** | archive | Chilliwack, BC | Long-term retention, ZFS, board |
-| **snowball** | storage | HRDAG office | Additional local copy |
-| **ipfs1** | storage | HRDAG office | Board node |
-| **meerkat** | storage | HRDAG office | |
-| **pihost** | storage | HRDAG office | |
-| **gate** | edge | HRDAG office | VPN gateway, Headscale |
+Nodes come in three classes: **active** (ingest + replicate), **archive**
+(long-term retention), and **volunteer** (contribute storage capacity to
+the network). Partner nodes are owned and operated by their respective
+organizations; HRDAG coordinates but does not administer them.
 
 ---
 
@@ -93,17 +83,15 @@ Four tools give four different views of the same system:
 
 ### Repository map
 
-All repos live at `../` relative to this one.
-
-| Repo | What it does | Start here |
-|------|-------------|------------|
-| **server-documentation** | Machine inventory, hardware specs, network config, security architecture | `docs/README.md` |
-| **hrdag-ansible** | Ansible playbooks: SSH, Tailscale, service deployment, user management | `README.md` → `docs/adding-new-host.md` |
-| **hrdag-monitor** | Infrastructure health monitoring. Prometheus + PostgreSQL. Daily email reports. | `docs/ARCHITECTURE.md` |
-| **filelister** | Scans filesystem, catalogs paths into PostgreSQL | `README.md` |
-| **ntx** | Packages files into encrypted + signed + timestamped commits | `README.md` |
-| **tfcs** | Replicates commits across the cluster. HTTP API on port 8099. | `README.md` |
-| **TFC** (this repo) | Infrastructure overview + real-time replication dashboard | you're here |
+| Repo | What it does |
+|------|-------------|
+| [server-documentation](https://github.com/HRDAG/server-documentation) | Machine inventory, hardware specs, network config, security architecture |
+| [hrdag-ansible](https://github.com/HRDAG/hrdag-ansible) | Ansible playbooks: SSH, Tailscale, service deployment, user management |
+| [hrdag-monitor](https://github.com/HRDAG/hrdag-monitor) | Infrastructure health monitoring. Prometheus + PostgreSQL. Daily email reports. |
+| [filelister](https://github.com/HRDAG/filelister) | Scans filesystem, catalogs file paths into PostgreSQL |
+| [ntx](https://github.com/HRDAG/ntx) | Packages files into encrypted + signed + timestamped commits |
+| [tfcs](https://github.com/HRDAG/tfcs) | Replicates commits across the cluster. HTTP API on port 8099. |
+| [TFC](https://github.com/HRDAG/tfcs-tui-app) (this repo) | Infrastructure overview + real-time replication dashboard |
 
 ---
 
@@ -139,19 +127,30 @@ All repos live at `../` relative to this one.
 
 ---
 
-## For New Sysadmins
+## Getting Started
 
-**If you're HRDAG staff:**
+Good entry points into the system:
 
-1. Read [server-documentation/docs/overview.md](../server-documentation/docs/overview.md) for the infrastructure map
-2. Read [server-documentation/resources/security-architecture.md](../server-documentation/resources/security-architecture.md) for the access model
-3. Read [server-documentation/docs/scott.md](../server-documentation/docs/scott.md) for the primary node
+- **[Security architecture](https://github.com/HRDAG/server-documentation/blob/main/resources/security-architecture.md)** —
+  how access, trust, and authentication work across the tailnet
 
-**If you're a partner org sysadmin (QNAP node):**
+- **[Fleet overview](https://github.com/HRDAG/server-documentation/blob/main/docs/README.md)** —
+  all machines at a glance, organized by role
 
-1. Your node is documented in `server-documentation/docs/<yourhost>.md`
-2. Your node runs `tfcs` as a Docker container — configuration in `hrdag-ansible/inventory/host_vars/<yourhost>.yml`
-3. Contact: HRDAG coordinates all TFC nodes. Reach out to pball for access issues.
+- **[Adding a new host](https://github.com/HRDAG/hrdag-ansible/blob/main/docs/adding-new-host.md)** —
+  complete workflow for onboarding a machine into the tailnet and infrastructure
+
+- **[ntx README](https://github.com/HRDAG/ntx/blob/main/README.md)** —
+  how the archival pipeline works end to end, with diagrams and CLI reference
+
+- **[tfcs README](https://github.com/HRDAG/tfcs/blob/main/README.md)** —
+  how the replication cluster coordinates, and what the HTTP API exposes
+
+- **[hrdag-monitor architecture](https://github.com/HRDAG/hrdag-monitor/blob/main/docs/ARCHITECTURE.md)** —
+  how infrastructure health monitoring is structured and what each layer does
+
+- **The TUI** — run `uv run tfcs-tui --mock` in this repo to see the cluster
+  state without needing a live connection
 
 ---
 
