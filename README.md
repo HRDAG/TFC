@@ -24,17 +24,17 @@ Bitcoin block.
 │  ┌──────────────┐  ┌─────────────────┐  ┌──────────────────────────┐   │
 │  │ HRDAG Office │  │ Chilliwack, BC  │  │  Partner nodes           │   │
 │  │              │  │                 │  │                          │   │
-│  │  scott  nas  │  │      chll       │  │  lizo (DataCivica)       │   │
-│  └──────────────┘  └─────────────────┘  │  qnap_ii (II)           │   │
-│                                          │  ant (Km0)              │   │
-│  ┌────────────────────────────────┐      │  myrtle (IJLA)          │   │
-│  │  Volunteer storage nodes       │      └──────────────────────────┘   │
-│  │                                │                                      │
-│  │  ipfs1 (HRDAG)                 │      ┌──────────────────────────┐   │
-│  │  snowball (HRDAG)              │      │  TechFutures (coloc.)    │   │
-│  │  meerkat (HRDAG)               │      │  kj (GPU)  ben (storage) │   │
-│  │  pihost (HRDAG)                │      │  ← coming                │   │
-│  │  alex (HRDAG)                  │      └──────────────────────────┘   │
+│  │  scott  nas  │  │      chll       │  │  scott  ant  ida         │   │
+│  └──────────────┘  └─────────────────┘  │  lizo   myrtle           │   │
+│                                          └──────────────────────────┘   │
+│  ┌────────────────────────────────┐                                      │
+│  │  Volunteer storage nodes       │      ┌──────────────────────────┐   │
+│  │                                │      │  TechFutures (coloc.)    │   │
+│  │  ipfs1 (HRDAG)                 │      │  kj (GPU)  ben (storage) │   │
+│  │  snowball (HRDAG)              │      │  ← coming                │   │
+│  │  meerkat (HRDAG)               │      └──────────────────────────┘   │
+│  │  pihost (HRDAG)                │                                      │
+│  │  alex (HRDAG)                  │                                      │
 │  └────────────────────────────────┘                                      │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
@@ -100,14 +100,34 @@ Four tools give four different views of the same system:
         │
   tfcs — moves commits to safe machines
   ──────────────────────────────────────
-  Replicates across 4+ nodes in multiple organizations
-        │
-   ┌────┴─────────────┬──────────────────────┬───────────────────┐
-   ▼                  ▼                      ▼                   ▼
-  partner nodes    rclone endpoints       IPFS / Filecoin      volunteer
-  scott, lizo,     S3, Google Drive,      decentralized        nodes
-  chll, ipfs1,     Dropbox, Backblaze     storage layer        (future)
-  meerkat...       (cloud copies)         (planned)
+  Replicates to safe locations
+```
+
+## What Replication Means
+
+```
+                      The TFC Coalition
+          ┌──────────────────────────────────────────────┐
+          │                                              │
+          │   HRDAG ←──────→ DataCivica ←──────→ II     │
+          │     ↕                                ↕       │
+          │   IJLA  ←──────────────────→ Km0            │
+          │                                              │
+          │      each org stores the others' data        │
+          └──┬──────────────────────────────────┬────────┘
+             │                                  │
+    ┌────────┴────────┐                ┌─────────┴──────────┐
+    │                 │                │                    │
+    ▼                 ▼                ▼                    ▼
+┌──────────┐   ┌───────────┐    ┌──────────┐   ┌──────────────────┐
+│ archive  ├───┤ volunteer │    │  cloud   │   │ IPFS / Filecoin  │
+│  nodes   │   │  nodes    │    │ storage  │   │    (planned)     │
+│  chll    │   │ snowball  │    │ S3       │   │ decentralized    │
+│  ben     │   │ meerkat   │    │ GDrive   │   │ permanent        │
+│ (coming) │   │ pihost    │    │ Dropbox  │   │ storage          │
+│          │   │ alex      │    │ Backbl.  │   │                  │
+│          │   │ + future  │    │ (planned)│   │                  │
+└──────────┘   └───────────┘    └──────────┘   └──────────────────┘
 ```
 
 ---
