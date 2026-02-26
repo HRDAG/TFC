@@ -141,12 +141,11 @@ Good entry points into the system:
 
 ## Real-Time Dashboard
 
-To watch the tfcs backup running in real-time, clone this repo and run:
+If you want to watch our dashboard running in real time, clone this repository to a machine that is authenticated to our tailnet, `cd` into this directory, and run this. 
 
 ```bash
 uv run tfcs-tui -c config/tfcs-tui.toml   # live cluster
 uv run tfcs-tui --mock                      # offline / development
 ```
 
-The dashboard shows replication progress, node health, per-org breakdown,
-traffic heatmaps, and heartbeat freshness across all cluster nodes.
+The dashboard shows replication progress, node health, per-org breakdown, traffic heatmaps, and heartbeat freshness across all cluster nodes.
