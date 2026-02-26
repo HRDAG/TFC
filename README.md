@@ -1,28 +1,12 @@
-Author: PB and Claude
-Date: 2026-02-25
-License: (c) HRDAG, 2026, GPL-2 or newer
-
----
-tfcs-tui-app/README.md
-
 # TFC — Data Pipeline & Infrastructure Overview
 
-This repository is the entry point for understanding the TFC distributed
-archival infrastructure and the map to every related codebase.
+The Technology Freedom Cooperative (TFC) is a coalition of human rights
+organizations that mutually support each other's storage infrastructure.
 
----
-
-## What We're Doing
-
-HRDAG is a founding member of the **Technology Freedom Cooperative (TFC)**, a
-coalition of human rights organizations that mutually operate each other's
-storage infrastructure. The goal is durable, verifiable preservation of
-evidence — the kind that must survive organizational failure, government
-seizure, or simple hardware death.
-
-No single organization holds all the data. No single node failure can destroy
-it. Every archive has a cryptographic timestamp that proves it existed before a
-given Bitcoin block.
+Every archive is encrypted so that only the organizational owner can decrypt
+it; signed to affirm that only this organization could have created it; and
+it has a cryptographic timestamp that proves it existed before a given
+Bitcoin block.
 
 ---
 
@@ -46,11 +30,12 @@ given Bitcoin block.
 │  ┌────────────────────────────────┐      │  myrtle (IJLA)          │   │
 │  │  Volunteer storage nodes       │      └──────────────────────────┘   │
 │  │                                │                                      │
-│  │  ipfs1  snowball  meerkat      │      ┌──────────────────────────┐   │
-│  │  pihost  alex                  │      │  TechFutures (coloc.)    │   │
-│  └────────────────────────────────┘      │  kj (GPU)  ben (storage) │   │
-│                                          │  ← coming                │   │
-│                                          └──────────────────────────┘   │
+│  │  ipfs1 (HRDAG)                 │      ┌──────────────────────────┐   │
+│  │  snowball (HRDAG)              │      │  TechFutures (coloc.)    │   │
+│  │  meerkat (HRDAG)               │      │  kj (GPU)  ben (storage) │   │
+│  │  pihost (HRDAG)                │      │  ← coming                │   │
+│  │  alex (HRDAG)                  │      └──────────────────────────┘   │
+│  └────────────────────────────────┘                                      │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -66,7 +51,7 @@ organizations; HRDAG coordinates but does not administer them.
 Four tools give four different views of the same system:
 
 ```
-  ◄─────────────────────────── increasing recency ────────────────────────►
+  ──────────────────────────── increasing recency ────────────────────────►
 
   "What machines        "How were they        "What went wrong     "What's happening
    do we have?"          set up?"              yesterday?"          right now?"
@@ -91,7 +76,7 @@ Four tools give four different views of the same system:
 | [filelister](https://github.com/HRDAG/filelister) | Scans filesystem, catalogs file paths into PostgreSQL |
 | [ntx](https://github.com/HRDAG/ntx) | Packages files into encrypted + signed + timestamped commits |
 | [tfcs](https://github.com/HRDAG/tfcs) | Replicates commits across the cluster. HTTP API on port 8099. |
-| [TFC](https://github.com/HRDAG/tfcs-tui-app) (this repo) | Infrastructure overview + real-time replication dashboard |
+| [TFC](https://github.com/HRDAG/TFC) (this repo) | Infrastructure overview + real-time replication dashboard |
 
 ---
 
