@@ -24,7 +24,7 @@ Bitcoin block.
 │  ┌──────────────┐  ┌─────────────────┐  ┌──────────────────────────┐   │
 │  │ HRDAG Office │  │ Chilliwack, BC  │  │  Partner nodes           │   │
 │  │              │  │                 │  │                          │   │
-│  │  scott  nas  │  │      chll       │  │  scott  ant  ida         │   │
+│  │  nas         │  │      chll       │  │  scott  ant  ida         │   │
 │  └──────────────┘  └─────────────────┘  │  lizo   myrtle           │   │
 │                                          └──────────────────────────┘   │
 │  ┌────────────────────────────────┐                                      │
