@@ -19,5 +19,6 @@ bootstrap_peers = [
 ]
 
 http_port = 8099
+ntx_port = 9401
 target_copies = 4
 refresh_seconds = 10

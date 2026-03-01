@@ -44,6 +44,26 @@ async def fetch_status(
     return None
 
 
+async def fetch_ntx_status(
+    session: aiohttp.ClientSession, host: str, ntx_port: int,
+) -> dict | None:
+    """GET /status from ntx ingest pipeline on a single peer.
+
+    The ntx endpoint can take ~1 minute to respond, so callers should
+    use a generous timeout.
+    """
+    url = f"http://{host}:{ntx_port}/status"
+    try:
+        async with session.get(
+            url, timeout=aiohttp.ClientTimeout(total=90),
+        ) as resp:
+            if resp.status == 200:
+                return await resp.json()
+    except (aiohttp.ClientError, asyncio.TimeoutError, OSError):
+        pass
+    return None
+
+
 async def fetch_nodes(
     session: aiohttp.ClientSession, host: str, http_port: int,
 ) -> list[dict] | None:
@@ -189,6 +209,7 @@ def load_config(config_path: Path) -> dict:
     return {
         "peer_hosts": [bp.rsplit(":", 1)[0] for bp in peers],
         "http_port": raw.get("http_port", 8099),
+        "ntx_port": raw.get("ntx_port", 9401),
         "target_copies": raw.get("target_copies", 3),
         "refresh_seconds": raw.get("refresh_seconds", 10),
     }
@@ -385,6 +406,7 @@ class NodeDataStore:
         self._site_distribution: dict[int, int] = {}   # {sites: count} from /replication
         self._cluster_sole_holders: int = 0            # sole_holder_count from /replication
         self._by_org: dict = {}                        # {org: {distribution, site_distribution, by_node}}
+        self._ntx_statuses: dict[str, dict] = {}       # node_id -> ntx /status JSON
 
     def update_node(self, node_id: str, status: dict | None, traffic: dict | None) -> None:
         """Update data for a single node after polling it."""
@@ -494,6 +516,17 @@ class NodeDataStore:
     def by_org(self) -> dict:
         """Per-org breakdown: {org: {distribution, site_distribution, by_node}}."""
         return self._by_org
+
+    def update_ntx(self, node_id: str, ntx_status: dict | None) -> None:
+        """Update ntx ingest status for a single node."""
+        if ntx_status is None:
+            return
+        self._ntx_statuses[node_id] = ntx_status
+
+    @property
+    def ntx_statuses(self) -> list[dict]:
+        """All accumulated ntx /status responses."""
+        return list(self._ntx_statuses.values())
 
 
 async def fetch_heartbeat_matrix(

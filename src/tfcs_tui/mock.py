@@ -438,6 +438,64 @@ MOCK_VELOCITY_HISTORY = [
 ]
 
 
+# ---------------------------------------------------------------------------
+# ntx ingest mock data (matches ntx /status endpoint on port 9401)
+# ---------------------------------------------------------------------------
+
+NTX_STATUSES = [
+    {
+        "node_id": "scott",
+        "version": "0.7.10",
+        "uptime_seconds": 4803.8,
+        "pending": {"files": 1345306, "bytes": 1475885177232, "human": "1.3 TB"},
+        "committed": {"files": 10700889, "bytes": 5637210730309, "human": "5.1 TB"},
+        "throughput": {
+            "last_1h": {"commits": 28, "files": 1859, "bytes": 24106588506, "bytes_per_sec": 6696274},
+            "last_3h": {"commits": 72, "files": 8626, "bytes": 63182825874, "bytes_per_sec": 5850261},
+            "last_6h": {"commits": 130, "files": 15000, "bytes": 120000000000, "bytes_per_sec": 5555555},
+            "last_12h": {"commits": 250, "files": 28000, "bytes": 230000000000, "bytes_per_sec": 5324074},
+            "last_24h": {"commits": 480, "files": 52000, "bytes": 440000000000, "bytes_per_sec": 5092592},
+        },
+        "pipeline": {"total_commits": 5662, "signed": 5662,
+                      "ots_submitted": 5662, "ots_confirmed": 5598},
+        "ots": {"confirmed": 5598, "awaiting_confirmation": 64, "no_submission": 0,
+                "oldest_unconfirmed": "2026-03-01T00:37:44Z",
+                "oldest_unconfirmed_age_hours": 2.1},
+        "staging": {"path": "/var/tmp/tfcs/staging", "commit_dirs": 5626,
+                    "bytes": 6056385728454, "human": "5.5 TB"},
+        "eta": {"pending_bytes": 1475885177232, "bytes_per_sec_24h": 5092592,
+                "hours_remaining": 80.5},
+        "health": {"ingest_running": True, "last_commit_id": "2026-03-01T02:45:05Z",
+                   "last_commit_age_seconds": 43, "stuck_ots_24h": 0, "errors_24h": 0},
+    },
+    {
+        "node_id": "lizo",
+        "version": "0.7.10",
+        "uptime_seconds": 12400.5,
+        "pending": {"files": 234000, "bytes": 280000000000, "human": "280 GB"},
+        "committed": {"files": 3200000, "bytes": 1800000000000, "human": "1.8 TB"},
+        "throughput": {
+            "last_1h": {"commits": 15, "files": 980, "bytes": 12000000000, "bytes_per_sec": 3333333},
+            "last_3h": {"commits": 40, "files": 2800, "bytes": 33000000000, "bytes_per_sec": 3055555},
+            "last_6h": {"commits": 75, "files": 5200, "bytes": 62000000000, "bytes_per_sec": 2870370},
+            "last_12h": {"commits": 140, "files": 9800, "bytes": 115000000000, "bytes_per_sec": 2662037},
+            "last_24h": {"commits": 260, "files": 18000, "bytes": 210000000000, "bytes_per_sec": 2430555},
+        },
+        "pipeline": {"total_commits": 2100, "signed": 2100,
+                      "ots_submitted": 2100, "ots_confirmed": 2050},
+        "ots": {"confirmed": 2050, "awaiting_confirmation": 50, "no_submission": 0,
+                "oldest_unconfirmed": "2026-03-01T01:15:00Z",
+                "oldest_unconfirmed_age_hours": 1.5},
+        "staging": {"path": "/var/tmp/tfcs/staging", "commit_dirs": 2080,
+                    "bytes": 1900000000000, "human": "1.9 TB"},
+        "eta": {"pending_bytes": 280000000000, "bytes_per_sec_24h": 2430555,
+                "hours_remaining": 32.0},
+        "health": {"ingest_running": True, "last_commit_id": "2026-03-01T02:40:12Z",
+                   "last_commit_age_seconds": 340, "stuck_ots_24h": 0, "errors_24h": 0},
+    },
+]
+
+
 def make_mock_snapshots() -> list[dict]:
     """Build mock snapshots spanning 5 minutes for immediate velocity display.
 

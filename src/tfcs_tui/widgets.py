@@ -1245,3 +1245,212 @@ class OrgNodeTable(DataTable):
                     style = "green" if pct >= 0.1 else "yellow"
                     row.append(Text(f"{count:,}", style=style))
             self.add_row(*row)
+
+
+# ---------------------------------------------------------------------------
+# Ingest overview (ntx aggregate summary)
+# ---------------------------------------------------------------------------
+
+class IngestOverview(Static):
+    """Aggregate ingest summary across all ntx nodes."""
+
+    DEFAULT_CSS = """
+    IngestOverview {
+        padding: 0 1;
+        height: auto;
+        margin-bottom: 0;
+        background: $surface;
+        border: tall $primary;
+    }
+    """
+
+    def refresh_data(self, ntx_statuses: list[dict]) -> None:
+        if not ntx_statuses:
+            self.update(Text("Ingest: waiting for data...", style="dim"))
+            return
+
+        total_pending_files = sum(s["pending"]["files"] for s in ntx_statuses)
+        total_pending_bytes = sum(s["pending"]["bytes"] for s in ntx_statuses)
+        total_committed_files = sum(s["committed"]["files"] for s in ntx_statuses)
+        total_committed_bytes = sum(s["committed"]["bytes"] for s in ntx_statuses)
+        total_rate_1h = sum(
+            s["throughput"]["last_1h"]["bytes_per_sec"] for s in ntx_statuses
+        )
+
+        all_healthy = all(
+            s.get("health", {}).get("ingest_running", False)
+            for s in ntx_statuses
+        )
+
+        lines = []
+        lines.append(Text(f"{len(ntx_statuses)} ingest nodes", style="bold"))
+
+        pend = Text()
+        pend.append("Pending: ", style="")
+        pend.append(f"{total_pending_files:,} files  ", style="yellow")
+        pend.append(
+            humanize.naturalsize(total_pending_bytes, binary=False), style="yellow",
+        )
+        pend.append("    Committed: ", style="")
+        pend.append(f"{total_committed_files:,} files  ", style="green")
+        pend.append(
+            humanize.naturalsize(total_committed_bytes, binary=False), style="green",
+        )
+        lines.append(pend)
+
+        tp = Text()
+        tp.append("Throughput (1h): ", style="")
+        tp.append(
+            humanize.naturalsize(total_rate_1h, binary=False) + "/s", style="cyan",
+        )
+        tp.append("    Health: ", style="")
+        if all_healthy:
+            tp.append("OK", style="green bold")
+        else:
+            tp.append("DEGRADED", style="red bold")
+        lines.append(tp)
+
+        self.update(Text("\n").join(lines))
+
+
+# ---------------------------------------------------------------------------
+# Ingest per-node table
+# ---------------------------------------------------------------------------
+
+class IngestNodeTable(DataTable):
+    """Per-node ingest metrics table."""
+
+    DEFAULT_CSS = """
+    IngestNodeTable {
+        height: auto;
+        max-height: 8;
+        margin-bottom: 1;
+    }
+    """
+
+    def on_mount(self) -> None:
+        self.add_column("Node", width=8, key="node")
+        self.add_column("Ver", width=7, key="ver")
+        self.add_column("Uptime", width=9, key="uptime")
+        self.add_column("Pending", width=12, key="pending")
+        self.add_column("Committed", width=12, key="committed")
+        self.add_column("Rate 1h", width=10, key="rate_1h")
+        self.add_column("Rate 24h", width=10, key="rate_24h")
+        self.add_column("ETA", width=8, key="eta")
+        self.add_column("Last", width=6, key="last_age")
+        self.add_column("Health", width=7, key="health")
+        self.cursor_type = "none"
+
+    def refresh_data(self, ntx_statuses: list[dict]) -> None:
+        self.clear()
+        if not ntx_statuses:
+            return
+
+        for s in sorted(ntx_statuses, key=lambda x: x.get("node_id", "")):
+            node = s.get("node_id", "?")
+            health = s.get("health", {})
+            running = health.get("ingest_running", False)
+            last_age = health.get("last_commit_age_seconds", 0)
+            eta_data = s.get("eta", {})
+            eta_hrs = eta_data.get("hours_remaining")
+
+            rate_1h = s["throughput"]["last_1h"]["bytes_per_sec"]
+            rate_24h = s["throughput"]["last_24h"]["bytes_per_sec"]
+
+            health_text = Text("OK", style="green") if running else Text("DOWN", style="red bold")
+
+            if last_age < 120:
+                last_str = f"{last_age:.0f}s"
+                last_style = "green"
+            elif last_age < 3600:
+                last_str = f"{last_age / 60:.0f}m"
+                last_style = "yellow"
+            else:
+                last_str = f"{last_age / 3600:.1f}h"
+                last_style = "red"
+
+            if eta_hrs is not None and eta_hrs > 0:
+                if eta_hrs < 24:
+                    eta_str = f"{eta_hrs:.1f}h"
+                else:
+                    eta_str = f"{eta_hrs / 24:.1f}d"
+            else:
+                eta_str = "--"
+
+            self.add_row(
+                short(node),
+                s.get("version", "?"),
+                fmt_uptime(s.get("uptime_seconds", 0)),
+                humanize.naturalsize(s["pending"]["bytes"], binary=False),
+                humanize.naturalsize(s["committed"]["bytes"], binary=False),
+                humanize.naturalsize(rate_1h, binary=False) + "/s",
+                humanize.naturalsize(rate_24h, binary=False) + "/s",
+                eta_str,
+                Text(last_str, style=last_style),
+                health_text,
+            )
+
+
+# ---------------------------------------------------------------------------
+# Ingest pipeline / OTS detail
+# ---------------------------------------------------------------------------
+
+class IngestPipeline(Static):
+    """Per-node pipeline and OTS detail."""
+
+    DEFAULT_CSS = """
+    IngestPipeline {
+        padding: 0 1;
+        height: auto;
+        margin-bottom: 1;
+        border: solid green;
+    }
+    """
+
+    def refresh_data(self, ntx_statuses: list[dict]) -> None:
+        if not ntx_statuses:
+            self.update(Text("Pipeline: waiting for data...", style="dim"))
+            return
+
+        lines = []
+        for s in sorted(ntx_statuses, key=lambda x: x.get("node_id", "")):
+            node = short(s.get("node_id", "?"))
+            pipe = s.get("pipeline", {})
+            ots = s.get("ots", {})
+            staging = s.get("staging", {})
+            health = s.get("health", {})
+
+            header = Text()
+            header.append(f"{node}", style="bold")
+            header.append(f"  pipeline: {pipe.get('total_commits', 0):,} commits", style="")
+            header.append(f"  signed: {pipe.get('signed', 0):,}", style="dim")
+            lines.append(header)
+
+            ots_line = Text()
+            ots_line.append("  OTS: ", style="")
+            confirmed = ots.get("confirmed", 0)
+            awaiting = ots.get("awaiting_confirmation", 0)
+            ots_line.append(f"{confirmed:,} confirmed", style="green")
+            if awaiting > 0:
+                ots_line.append(f"  {awaiting:,} awaiting", style="yellow")
+                age_hrs = ots.get("oldest_unconfirmed_age_hours", 0)
+                if age_hrs > 0:
+                    ots_line.append(f" (oldest: {age_hrs:.1f}h)", style="dim")
+            lines.append(ots_line)
+
+            stg_line = Text()
+            stg_line.append("  Staging: ", style="")
+            stg_line.append(f"{staging.get('commit_dirs', 0):,} dirs", style="")
+            stg_line.append(f"  {staging.get('human', '?')}", style="dim")
+            errors = health.get("errors_24h", 0)
+            if errors > 0:
+                stg_line.append(f"  errors(24h): {errors}", style="red bold")
+            lines.append(stg_line)
+
+            lines.append(Text(""))  # blank separator between nodes
+
+        # Remove trailing blank line
+        if lines and lines[-1].plain == "":
+            lines.pop()
+
+        self.update(Text("\n").join(lines))

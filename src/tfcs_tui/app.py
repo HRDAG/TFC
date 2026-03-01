@@ -15,6 +15,7 @@ Mock:       tfcs-tui --mock
 from __future__ import annotations
 
 import argparse
+import asyncio
 import sys
 from pathlib import Path
 
@@ -27,6 +28,7 @@ from tfcs_tui.data import (
     DEFAULT_CONFIG,
     NodeDataStore,
     fetch_node_all,
+    fetch_ntx_status,
     load_config,
     load_tailscale_ip_map,
     load_velocity_history,
@@ -38,6 +40,9 @@ from tfcs_tui.data import (
 from tfcs_tui.widgets import (
     ClusterOverview,
     HeartbeatMatrix,
+    IngestNodeTable,
+    IngestOverview,
+    IngestPipeline,
     LatencyHeatmap,
     NodesTable,
     OrgNodeTable,
@@ -80,6 +85,7 @@ class TfcsDashboard(App):
         Binding("4", "tab_traffic", "Traffic", show=False),
         Binding("5", "tab_latency", "Latency", show=False),
         Binding("6", "tab_heartbeats", "Heartbeats", show=False),
+        Binding("7", "tab_ingest", "Ingest", show=False),
         Binding("j", "scroll_down", "Down", show=False),
         Binding("k", "scroll_up", "Up", show=False),
     ]
@@ -95,12 +101,18 @@ class TfcsDashboard(App):
         padding: 0 1;
         height: 1;
     }
+    .tab-desc {
+        color: $text-muted;
+        padding: 0 1;
+        height: 1;
+    }
     """
 
     def __init__(
         self,
         peer_hosts: list[str] | None = None,
         http_port: int = 8099,
+        ntx_port: int = 9401,
         target_copies: int = 3,
         refresh_seconds: int = 10,
         mock: bool = False,
@@ -108,6 +120,7 @@ class TfcsDashboard(App):
         super().__init__()
         self._peer_hosts = peer_hosts or []
         self._http_port = http_port
+        self._ntx_port = ntx_port
         self._target_copies = target_copies
         self._refresh_seconds = refresh_seconds
         self._mock = mock
@@ -115,6 +128,7 @@ class TfcsDashboard(App):
 
         # Rolling updates (one node at a time)
         self._current_node_index = 0
+        self._current_ntx_index = 0
 
         # Load IP to hostname mapping from tailscale
         if mock:
@@ -134,29 +148,41 @@ class TfcsDashboard(App):
         yield Static("", id="title-bar")
         with TabbedContent(initial="tab-replication"):
             with TabPane("Replication", id="tab-replication"):
+                yield Static("How many copies of each commit exist across the cluster, and how fast new copies are being made.", classes="tab-desc")
                 yield ClusterOverview(self._target_copies)
                 yield ReplicationChart()
                 yield ReplicationVelocity()
                 yield VelocityChart()
             with TabPane("Nodes", id="tab-nodes"):
+                yield Static("Per-node health, capacity, and active data transfers.", classes="tab-desc")
                 yield NodesTable()
                 yield SourceUtilization()
                 yield TransfersTable()
             with TabPane("Orgs", id="tab-orgs"):
+                yield Static("Replication and site distribution broken down by organization.", classes="tab-desc")
                 yield OrgsTable(self._target_copies)
                 yield OrgNodeTable(self._peer_hosts)
             with TabPane("Traffic", id="tab-traffic"):
+                yield Static("Bandwidth between every pair of nodes right now.", classes="tab-desc")
                 yield TrafficHeatmap(self._peer_hosts, self._ip_map)
             with TabPane("Latency", id="tab-latency"):
+                yield Static("Round-trip network latency between every pair of nodes.", classes="tab-desc")
                 yield LatencyHeatmap(self._peer_hosts, self._ip_map)
             with TabPane("Heartbeats", id="tab-heartbeats"):
+                yield Static("How recently each node has heard from every other node.", classes="tab-desc")
                 yield HeartbeatMatrix(self._peer_hosts)
+            with TabPane("Ingest", id="tab-ingest"):
+                yield Static("Upstream pipeline: files waiting to be packaged into sealed commits.", classes="tab-desc")
+                yield IngestOverview()
+                yield IngestNodeTable()
+                yield IngestPipeline()
         yield Footer()
 
     def on_mount(self) -> None:
         self.action_refresh()
         if not self._mock:
             self.set_interval(1.0, self._poll_next_node)
+            self.set_interval(120.0, self._poll_next_ntx_node)
 
     def action_refresh(self) -> None:
         """Initial refresh on startup (or manual refresh with 'r' key)."""
@@ -168,6 +194,7 @@ class TfcsDashboard(App):
                 MOCK_VELOCITY,
                 MOCK_VELOCITY_HISTORY,
                 NODE_STATUS,
+                NTX_STATUSES,
                 REPLICATION,
                 SITE_DISTRIBUTION,
                 STATUSES,
@@ -182,6 +209,10 @@ class TfcsDashboard(App):
                                       velocity=MOCK_VELOCITY,
                                       site_distribution=SITE_DISTRIBUTION,
                                       by_org=BY_ORG)
+
+            # Populate ntx ingest data
+            for ns in NTX_STATUSES:
+                self._store.update_ntx(ns["node_id"], ns)
 
             # Set velocity history for chart
             self._velocity_history = list(MOCK_VELOCITY_HISTORY)
@@ -214,9 +245,48 @@ class TfcsDashboard(App):
                                           site_distribution=site_dist,
                                           cluster_sole_holders=sole_holders,
                                           by_org=by_org)
+
+                # Burst-fetch ntx from active nodes (now that statuses are populated)
+                import aiohttp
+                ntx_hosts = self._get_ntx_hosts()
+                if ntx_hosts:
+                    async with aiohttp.ClientSession() as ntx_session:
+                        tasks = [fetch_ntx_status(ntx_session, h, self._ntx_port) for h in ntx_hosts]
+                        results = await asyncio.gather(*tasks)
+                        for ntx_host, ntx_data in zip(ntx_hosts, results):
+                            if ntx_data:
+                                self._store.update_ntx(short(ntx_host), ntx_data)
+
                 self.post_message(NodeUpdated(updated_node="refresh"))
 
             self.run_worker(do_full_refresh, exclusive=False)
+
+    def _get_ntx_hosts(self) -> list[str]:
+        """Return FQDNs of nodes with node_class == 'active' (ntx ingest nodes)."""
+        return [
+            s["node_id"]
+            for s in self._store.statuses
+            if s.get("node_class") == "active"
+        ]
+
+    def _poll_next_ntx_node(self) -> None:
+        """Poll next ntx ingest node (120s interval, 90s timeout)."""
+        ntx_hosts = self._get_ntx_hosts()
+        if not ntx_hosts:
+            return
+
+        host = ntx_hosts[self._current_ntx_index % len(ntx_hosts)]
+        self._current_ntx_index = (self._current_ntx_index + 1) % len(ntx_hosts)
+
+        async def do_ntx_poll():
+            import aiohttp
+            async with aiohttp.ClientSession() as session:
+                ntx_data = await fetch_ntx_status(session, host, self._ntx_port)
+                if ntx_data:
+                    self._store.update_ntx(short(host), ntx_data)
+                    self.post_message(NodeUpdated(updated_node=host))
+
+        self.run_worker(do_ntx_poll, exclusive=False)
 
     def _poll_next_node(self) -> None:
         """Poll next node in rolling sequence (1 node per second)."""
@@ -341,6 +411,12 @@ class TfcsDashboard(App):
         self.query_one(LatencyHeatmap).refresh_data(store.traffic_reports, message.updated_node)
         self.query_one(HeartbeatMatrix).refresh_data(store.heartbeat_matrix, message.updated_node)
 
+        # --- Ingest tab (Tab 7) ---
+        ntx = store.ntx_statuses
+        self.query_one(IngestOverview).refresh_data(ntx)
+        self.query_one(IngestNodeTable).refresh_data(ntx)
+        self.query_one(IngestPipeline).refresh_data(ntx)
+
         # Update title bar
         self._update_title_bar()
 
@@ -373,6 +449,9 @@ class TfcsDashboard(App):
             title_bar.update(
                 f" tfcs heartbeat matrix    {n_reporting}/{len(self._peer_hosts)} nodes reporting"
             )
+        elif active_tab == "tab-ingest":
+            n_ntx = len(self._store.ntx_statuses)
+            title_bar.update(f" ntx ingest pipeline    {n_ntx} nodes reporting")
 
     def action_tab_replication(self) -> None:
         """Switch to replication tab."""
@@ -402,6 +481,11 @@ class TfcsDashboard(App):
     def action_tab_heartbeats(self) -> None:
         """Switch to heartbeats tab."""
         self.query_one(TabbedContent).active = "tab-heartbeats"
+        self._update_title_bar()
+
+    def action_tab_ingest(self) -> None:
+        """Switch to ingest tab."""
+        self.query_one(TabbedContent).active = "tab-ingest"
         self._update_title_bar()
 
     def action_scroll_down(self) -> None:
@@ -441,6 +525,7 @@ def main() -> None:
         app = TfcsDashboard(
             peer_hosts=cfg["peer_hosts"],
             http_port=cfg["http_port"],
+            ntx_port=cfg["ntx_port"],
             target_copies=cfg["target_copies"],
             refresh_seconds=cfg["refresh_seconds"],
         )
