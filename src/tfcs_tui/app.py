@@ -134,6 +134,7 @@ class TfcsDashboard(App):
         if mock:
             from tfcs_tui.mock import IP_MAP
             self._ip_map = IP_MAP
+            self._peer_hosts = sorted(set(IP_MAP.values()))
         else:
             self._ip_map = load_tailscale_ip_map(self._peer_hosts)
 
