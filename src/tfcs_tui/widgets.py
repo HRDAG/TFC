@@ -385,7 +385,7 @@ class NodesTable(DataTable):
         self.add_column("Status", width=7, key="status")
         self.add_column("HB", width=4, key="hb")
         self.add_column("Uptime", width=9, key="uptime")
-        self.add_column("Ver", width=7, key="ver")
+        self.add_column("tfcs-Ver", width=9, key="ver")
         self.add_column("Seq", width=5, key="seq")
         self.add_column("Store", width=5, key="store")
         self.add_column("Free", width=7, key="free")
@@ -758,6 +758,13 @@ class BaseHeatmap(Static):
         label_width = self._get_row_label_width()
         diag_r1, diag_r2, diag_r3 = self._get_diagonal_pattern()
         diag_style = self._get_diagonal_style()
+
+        # Axis labels
+        col_area_width = len(self.node_names) * 7
+        axis_line = Text()
+        axis_line.append(f"{'sender ↓':<{label_width}}", style="dim")
+        axis_line.append(f"{'receiver →':^{col_area_width}}", style="dim")
+        lines.append(axis_line)
 
         # Column header
         header = Text(" " * label_width)
@@ -1330,7 +1337,7 @@ class IngestNodeTable(DataTable):
 
     def on_mount(self) -> None:
         self.add_column("Node", width=8, key="node")
-        self.add_column("Ver", width=7, key="ver")
+        self.add_column("ntx ver", width=7, key="ver")
         self.add_column("Uptime", width=9, key="uptime")
         self.add_column("Pending", width=12, key="pending")
         self.add_column("Committed", width=12, key="committed")
