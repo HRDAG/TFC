@@ -106,6 +106,17 @@ async def fetch_replication(
                 site_dist = {int(k): v for k, v in local.get("site_distribution", {}).items()}
                 sole_holders = local.get("sole_holder_count", 0)
                 velocity = data.get("velocity")  # None if endpoint doesn't support it yet
+                if velocity is not None and "total" in velocity:
+                    # v0.7+ nests under "total"/"platform"; normalize to flat shape
+                    total = velocity["total"]
+                    local_vel = velocity.get("platform", {}).get("local", {})
+                    velocity = {
+                        "window_minutes": velocity.get("window_minutes", 10),
+                        "copies_per_min": total.get("copies_per_min", 0),
+                        "new_copies": total.get("new_copies", 0),
+                        "bytes_per_min": total.get("bytes_per_min", 0),
+                        "by_source": local_vel.get("by_source", {}),
+                    }
                 by_org: dict = {}
                 for org, org_data in local.get("by_org", {}).items():
                     by_org[org] = {
