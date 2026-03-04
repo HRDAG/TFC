@@ -88,20 +88,26 @@ Four tools give four different views of the same system:
   Scans filesystem, tracks what's new or changed
   Catalogs file paths → PostgreSQL (scottfiles.paths)
         │
-        ▼
+        ▼  new/changed paths
+        │
   ntx — bundles files into sealed, provable commits
   ──────────────────────────────────────────────────
-  Batches ~1GB of files into one commit
-  Hashes, archives, encrypts, adds parity
-  Signs with org key, anchors to Bitcoin via OpenTimestamps
-  Result: unforgeable proof that this data existed at this moment
+  Reads new paths from filelister in PostgreSQL
+  Batches files into ~1 GB bundles, with error correction (par2)
+  Encrypts each bundle with the owner's key — only the keyholder can read it
+  Signs with org key + Bitcoin timestamp (OpenTimestamps)
+  Result: only the owner can read it; only the owner could have made it; and provably timestamped.
+  Deposits sealed commits → staging/
         │
-        ▼  sealed commit packages
+        ▼  sealed commit packages in staging/
         │
-  tfcs — moves commits to safe machines
-  ──────────────────────────────────────
-  Replicates to safe locations
+  tfcs — ingests, then replicates across the coalition
+  ─────────────────────────────────────────────────────
+  Picks up commits from staging/ into its content-addressed store
+  Replicates to other nodes; tracks copies-per-commit
 ```
+
+> par2 error correction: [Parchive](https://wiki.archlinux.org/title/Parchive) · Bitcoin timestamping: [OpenTimestamps](https://en.wikipedia.org/wiki/OpenTimestamps)
 
 ## What Replication Means
 
