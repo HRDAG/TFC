@@ -415,7 +415,7 @@ class TfcsDashboard(App):
         # --- Ingest tab (Tab 7) ---
         ntx = store.ntx_statuses
         self.query_one(IngestOverview).refresh_data(ntx)
-        self.query_one(IngestNodeTable).refresh_data(ntx)
+        self.query_one(IngestNodeTable).refresh_data(ntx, store.statuses)
         self.query_one(IngestPipeline).refresh_data(ntx)
 
         # Update title bar

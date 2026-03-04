@@ -411,6 +411,14 @@ class NodesTable(DataTable):
     ) -> None:
         self.clear()
 
+        # Extract cluster_max_version from any status that has update_status
+        cluster_max_version = None
+        for s in statuses:
+            us = s.get("update_status", {})
+            if us:
+                cluster_max_version = us.get("cluster_max_version")
+                break
+
         # Sort with scott first, then alphabetical
         def sort_key(s):
             nid = s["node_id"]
@@ -437,6 +445,13 @@ class NodesTable(DataTable):
             sole_count = s.get("sole_holder_count", 0)
             node_cell = Text(short(nid), style="red bold" if sole_count > 0 else "")
 
+            ver = s.get("version", "?")
+            ver_cell = (
+                Text(ver, style="yellow")
+                if cluster_max_version and ver not in ("?", cluster_max_version)
+                else ver
+            )
+
             self.add_row(
                 node_cell,
                 s.get("cluster", "?"),
@@ -444,7 +459,7 @@ class NodesTable(DataTable):
                 Text(status, style=status_style),
                 Text(hb_str, justify="right"),
                 uptime,
-                s.get("version", "?"),
+                ver_cell,
                 Text(str(s.get("seq", 0)), justify="right"),
                 Text(str(s.get("store_count", 0)), justify="right"),
                 Text(free_str, style=free_style, justify="right"),
@@ -1343,23 +1358,27 @@ class IngestNodeTable(DataTable):
         self.add_column("Committed", width=12, key="committed")
         self.add_column("Rate 1h", width=10, key="rate_1h")
         self.add_column("Rate 24h", width=10, key="rate_24h")
-        self.add_column("ETA", width=8, key="eta")
+        self.add_column("Stg", width=5, key="stg")
         self.add_column("Last", width=6, key="last_age")
         self.add_column("Health", width=7, key="health")
         self.cursor_type = "none"
 
-    def refresh_data(self, ntx_statuses: list[dict]) -> None:
+    def refresh_data(self, ntx_statuses: list[dict], statuses: list[dict] | None = None) -> None:
         self.clear()
         if not ntx_statuses:
             return
+
+        # Build lookup: short node name -> staging_not_ingested count (from tfcs /status)
+        staging_lookup: dict[str, int] = {}
+        if statuses:
+            for ts in statuses:
+                staging_lookup[short(ts["node_id"])] = ts.get("staging_not_ingested", 0)
 
         for s in sorted(ntx_statuses, key=lambda x: x.get("node_id", "")):
             node = s.get("node_id", "?")
             health = s.get("health", {})
             running = health.get("ingest_running", False)
             last_age = health.get("last_commit_age_seconds", 0)
-            eta_data = s.get("eta", {})
-            eta_hrs = eta_data.get("hours_remaining")
 
             rate_1h = s["throughput"]["last_1h"]["bytes_per_sec"]
             rate_24h = s["throughput"]["last_24h"]["bytes_per_sec"]
@@ -1376,13 +1395,8 @@ class IngestNodeTable(DataTable):
                 last_str = f"{last_age / 3600:.1f}h"
                 last_style = "red"
 
-            if eta_hrs is not None and eta_hrs > 0:
-                if eta_hrs < 24:
-                    eta_str = f"{eta_hrs:.1f}h"
-                else:
-                    eta_str = f"{eta_hrs / 24:.1f}d"
-            else:
-                eta_str = "--"
+            stg_count = staging_lookup.get(short(node), 0)
+            stg_cell = Text(str(stg_count), style="yellow" if stg_count > 0 else "dim", justify="right")
 
             self.add_row(
                 short(node),
@@ -1392,7 +1406,7 @@ class IngestNodeTable(DataTable):
                 humanize.naturalsize(s["committed"]["bytes"], binary=False),
                 humanize.naturalsize(rate_1h, binary=False) + "/s",
                 humanize.naturalsize(rate_24h, binary=False) + "/s",
-                eta_str,
+                stg_cell,
                 Text(last_str, style=last_style),
                 health_text,
             )
