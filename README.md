@@ -142,7 +142,7 @@ Four tools give four different views of the same system:
 
 Good entry points into the system:
 
-- **[Security architecture](https://github.com/HRDAG/server-documentation/blob/main/resources/security-architecture.md)** —
+- **[Security architecture](https://github.com/HRDAG/server-documentation/blob/main/architecture/security-architecture.md)** —
   how access, trust, and authentication work across the tailnet
 
 - **[Fleet overview](https://github.com/HRDAG/server-documentation/blob/main/docs/README.md)** —
