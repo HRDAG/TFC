@@ -493,6 +493,31 @@ NTX_STATUSES = [
         "health": {"ingest_running": True, "last_commit_id": "2026-03-01T02:40:12Z",
                    "last_commit_age_seconds": 340, "stuck_ots_24h": 0, "errors_24h": 0},
     },
+    {
+        "node_id": "chll",
+        "version": "0.7.10",
+        "uptime_seconds": 86400.0,
+        "pending": {"files": 89000, "bytes": 95000000000, "human": "95 GB"},
+        "committed": {"files": 1500000, "bytes": 820000000000, "human": "820 GB"},
+        "throughput": {
+            "last_1h": {"commits": 8, "files": 520, "bytes": 6400000000, "bytes_per_sec": 1777777},
+            "last_3h": {"commits": 22, "files": 1400, "bytes": 17000000000, "bytes_per_sec": 1574074},
+            "last_6h": {"commits": 40, "files": 2600, "bytes": 31000000000, "bytes_per_sec": 1435185},
+            "last_12h": {"commits": 72, "files": 4800, "bytes": 56000000000, "bytes_per_sec": 1296296},
+            "last_24h": {"commits": 130, "files": 8800, "bytes": 100000000000, "bytes_per_sec": 1157407},
+        },
+        "pipeline": {"total_commits": 980, "signed": 980,
+                      "ots_submitted": 980, "ots_confirmed": 960},
+        "ots": {"confirmed": 960, "awaiting_confirmation": 20, "no_submission": 0,
+                "oldest_unconfirmed": "2026-03-01T03:10:00Z",
+                "oldest_unconfirmed_age_hours": 0.8},
+        "staging": {"path": "/var/tmp/tfcs/staging", "commit_dirs": 970,
+                    "bytes": 860000000000, "human": "860 GB"},
+        "eta": {"pending_bytes": 95000000000, "bytes_per_sec_24h": 1157407,
+                "hours_remaining": 22.8},
+        "health": {"ingest_running": True, "last_commit_id": "2026-03-01T02:50:30Z",
+                   "last_commit_age_seconds": 120, "stuck_ots_24h": 0, "errors_24h": 0},
+    },
 ]
 
 

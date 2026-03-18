@@ -223,6 +223,7 @@ def load_config(config_path: Path) -> dict:
         "ntx_port": raw.get("ntx_port", 9401),
         "target_copies": raw.get("target_copies", 3),
         "refresh_seconds": raw.get("refresh_seconds", 10),
+        "ntx_hosts": raw.get("ntx_hosts"),
     }
 
 

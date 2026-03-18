@@ -116,6 +116,7 @@ class TfcsDashboard(App):
         target_copies: int = 3,
         refresh_seconds: int = 10,
         mock: bool = False,
+        ntx_hosts: list[str] | None = None,
     ) -> None:
         super().__init__()
         self._peer_hosts = peer_hosts or []
@@ -124,6 +125,7 @@ class TfcsDashboard(App):
         self._target_copies = target_copies
         self._refresh_seconds = refresh_seconds
         self._mock = mock
+        self._ntx_hosts_config = ntx_hosts
         self._store = NodeDataStore()
 
         # Rolling updates (one node at a time)
@@ -263,7 +265,13 @@ class TfcsDashboard(App):
             self.run_worker(do_full_refresh, exclusive=False)
 
     def _get_ntx_hosts(self) -> list[str]:
-        """Return FQDNs of nodes with node_class == 'active' (ntx ingest nodes)."""
+        """Return FQDNs of ntx ingest nodes.
+
+        Uses ntx_hosts from config if present, otherwise falls back
+        to nodes with node_class == 'active'.
+        """
+        if self._ntx_hosts_config:
+            return list(self._ntx_hosts_config)
         return [
             s["node_id"]
             for s in self._store.statuses
@@ -529,6 +537,7 @@ def main() -> None:
             ntx_port=cfg["ntx_port"],
             target_copies=cfg["target_copies"],
             refresh_seconds=cfg["refresh_seconds"],
+            ntx_hosts=cfg["ntx_hosts"],
         )
 
     app.run()
