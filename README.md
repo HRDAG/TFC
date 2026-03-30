@@ -37,9 +37,11 @@ Bitcoin block.
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
-Nodes come in three classes: **active** (ingest + replicate), **archive**
-(long-term retention), and **storage** (contribute capacity to the
-network). Partner nodes are owned and operated by their respective
+Nodes come in five classes: **active** (ingest from staging + replicate),
+**anchor** (like active, for multi-org ingest), **archive** (long-term
+backstop, gets all commits), **storage** (contribute capacity, respects
+trust matching), and **compute** (participates in cluster but doesn't
+ingest). Partner nodes are owned and operated by their respective
 organizations; HRDAG coordinates but does not administer them.
 
 ---
