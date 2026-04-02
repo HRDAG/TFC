@@ -9,7 +9,6 @@
 
 Production: tfcs-tui                                (reads /etc/hrdag/tfcs-tui.toml)
 Dev:        tfcs-tui -c config/tfcs-tui.toml
-Mock:       tfcs-tui --mock
 """
 
 from __future__ import annotations
@@ -110,21 +109,19 @@ class TfcsDashboard(App):
 
     def __init__(
         self,
-        peer_hosts: list[str] | None = None,
+        peer_hosts: list[str],
         http_port: int = 8099,
         ntx_port: int = 9401,
         target_copies: int = 3,
         refresh_seconds: int = 10,
-        mock: bool = False,
         ntx_hosts: list[str] | None = None,
     ) -> None:
         super().__init__()
-        self._peer_hosts = peer_hosts or []
+        self._peer_hosts = peer_hosts
         self._http_port = http_port
         self._ntx_port = ntx_port
         self._target_copies = target_copies
         self._refresh_seconds = refresh_seconds
-        self._mock = mock
         self._ntx_hosts_config = ntx_hosts
         self._store = NodeDataStore()
 
@@ -132,19 +129,8 @@ class TfcsDashboard(App):
         self._current_node_index = 0
         self._current_ntx_index = 0
 
-        # Load IP to hostname mapping from tailscale
-        if mock:
-            from tfcs_tui.mock import IP_MAP
-            self._ip_map = IP_MAP
-            self._peer_hosts = sorted(set(IP_MAP.values()))
-        else:
-            self._ip_map = load_tailscale_ip_map(self._peer_hosts)
-
-        # Snapshot persistence (real mode only)
-        if not mock:
-            self._velocity_history = load_velocity_history()
-        else:
-            self._velocity_history = []
+        self._ip_map = load_tailscale_ip_map(self._peer_hosts)
+        self._velocity_history = load_velocity_history()
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -183,86 +169,50 @@ class TfcsDashboard(App):
 
     def on_mount(self) -> None:
         self.action_refresh()
-        if not self._mock:
-            self.set_interval(1.0, self._poll_next_node)
-            self.set_interval(120.0, self._poll_next_ntx_node)
+        self.set_interval(1.0, self._poll_next_node)
+        self.set_interval(120.0, self._poll_next_ntx_node)
 
     def action_refresh(self) -> None:
         """Initial refresh on startup (or manual refresh with 'r' key)."""
-        if self._mock:
-            from tfcs_tui.mock import (
-                BY_ORG,
-                HEARTBEAT_AGE,
-                HEARTBEAT_MATRIX,
-                MOCK_VELOCITY,
-                MOCK_VELOCITY_HISTORY,
-                NODE_STATUS,
-                NTX_STATUSES,
-                REPLICATION,
-                SITE_DISTRIBUTION,
-                STATUSES,
-                TRAFFIC_REPORTS,
+        async def do_full_refresh():
+            statuses, node_status, heartbeat_age, replication, velocity, site_dist, sole_holders, by_org = await poll_cluster(
+                self._peer_hosts, self._http_port, self._target_copies
             )
-            # Populate the datastore
-            for s in STATUSES:
-                self._store.update_node(s["node_id"], status=s, traffic=None)
-            for r in TRAFFIC_REPORTS:
-                self._store.update_node(r["node_id"], status=None, traffic=r)
-            self._store.update_global(NODE_STATUS, HEARTBEAT_AGE, REPLICATION, HEARTBEAT_MATRIX,
-                                      velocity=MOCK_VELOCITY,
-                                      site_distribution=SITE_DISTRIBUTION,
-                                      by_org=BY_ORG)
+            traffic_reports = await poll_traffic_matrix(
+                self._peer_hosts, self._http_port
+            )
 
-            # Populate ntx ingest data
-            for ns in NTX_STATUSES:
-                self._store.update_ntx(ns["node_id"], ns)
+            # Populate datastore
+            for status in statuses:
+                node_id = status.get("node_id")
+                if node_id:
+                    self._store.update_node(node_id, status, None)
 
-            # Set velocity history for chart
-            self._velocity_history = list(MOCK_VELOCITY_HISTORY)
+            for traffic in traffic_reports:
+                node_id = traffic.get("node_id")
+                if node_id:
+                    self._store.update_node(node_id, None, traffic)
 
-            self.post_message(NodeUpdated(updated_node="mock"))
-        else:
-            # Full burst refresh using existing poll functions
-            async def do_full_refresh():
-                statuses, node_status, heartbeat_age, replication, velocity, site_dist, sole_holders, by_org = await poll_cluster(
-                    self._peer_hosts, self._http_port, self._target_copies
-                )
-                traffic_reports = await poll_traffic_matrix(
-                    self._peer_hosts, self._http_port
-                )
+            self._store.update_global(node_status, heartbeat_age, replication,
+                                      velocity=velocity,
+                                      site_distribution=site_dist,
+                                      cluster_sole_holders=sole_holders,
+                                      by_org=by_org)
 
-                # Populate datastore
-                for status in statuses:
-                    node_id = status.get("node_id")
-                    if node_id:
-                        self._store.update_node(node_id, status, None)
+            # Burst-fetch ntx from active nodes (now that statuses are populated)
+            import aiohttp
+            ntx_hosts = self._get_ntx_hosts()
+            if ntx_hosts:
+                async with aiohttp.ClientSession() as ntx_session:
+                    tasks = [fetch_ntx_status(ntx_session, h, self._ntx_port) for h in ntx_hosts]
+                    results = await asyncio.gather(*tasks)
+                    for ntx_host, ntx_data in zip(ntx_hosts, results):
+                        if ntx_data:
+                            self._store.update_ntx(short(ntx_host), ntx_data)
 
-                for traffic in traffic_reports:
-                    node_id = traffic.get("node_id")
-                    if node_id:
-                        # Merge with existing node or create new
-                        self._store.update_node(node_id, None, traffic)
+            self.post_message(NodeUpdated(updated_node="refresh"))
 
-                self._store.update_global(node_status, heartbeat_age, replication,
-                                          velocity=velocity,
-                                          site_distribution=site_dist,
-                                          cluster_sole_holders=sole_holders,
-                                          by_org=by_org)
-
-                # Burst-fetch ntx from active nodes (now that statuses are populated)
-                import aiohttp
-                ntx_hosts = self._get_ntx_hosts()
-                if ntx_hosts:
-                    async with aiohttp.ClientSession() as ntx_session:
-                        tasks = [fetch_ntx_status(ntx_session, h, self._ntx_port) for h in ntx_hosts]
-                        results = await asyncio.gather(*tasks)
-                        for ntx_host, ntx_data in zip(ntx_hosts, results):
-                            if ntx_data:
-                                self._store.update_ntx(short(ntx_host), ntx_data)
-
-                self.post_message(NodeUpdated(updated_node="refresh"))
-
-            self.run_worker(do_full_refresh, exclusive=False)
+        self.run_worker(do_full_refresh, exclusive=False)
 
     def _get_ntx_hosts(self) -> list[str]:
         """Return FQDNs of ntx ingest nodes.
@@ -396,7 +346,7 @@ class TfcsDashboard(App):
             store.site_distribution, sole_holder_nodes,
         )
 
-        if not self._mock and vel_data is not None:
+        if vel_data is not None:
             from datetime import datetime
             save_snapshot(store.replication, vel_data, time.time())
             label = datetime.now().strftime("%H:%M")
@@ -516,29 +466,24 @@ def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="tfcs cluster dashboard TUI")
     p.add_argument("-c", "--config", type=Path, default=DEFAULT_CONFIG,
                    help=f"Path to TOML config (default: {DEFAULT_CONFIG})")
-    p.add_argument("--mock", action="store_true",
-                   help="Use built-in mock data")
     return p.parse_args()
 
 
 def main() -> None:
     args = _parse_args()
 
-    if args.mock:
-        app = TfcsDashboard(mock=True)
-    else:
-        if not args.config.exists():
-            print(f"Config not found: {args.config}", file=sys.stderr)
-            sys.exit(1)
-        cfg = load_config(args.config)
-        app = TfcsDashboard(
-            peer_hosts=cfg["peer_hosts"],
-            http_port=cfg["http_port"],
-            ntx_port=cfg["ntx_port"],
-            target_copies=cfg["target_copies"],
-            refresh_seconds=cfg["refresh_seconds"],
-            ntx_hosts=cfg["ntx_hosts"],
-        )
+    if not args.config.exists():
+        print(f"Config not found: {args.config}", file=sys.stderr)
+        sys.exit(1)
+    cfg = load_config(args.config)
+    app = TfcsDashboard(
+        peer_hosts=cfg["peer_hosts"],
+        http_port=cfg["http_port"],
+        ntx_port=cfg["ntx_port"],
+        target_copies=cfg["target_copies"],
+        refresh_seconds=cfg["refresh_seconds"],
+        ntx_hosts=cfg["ntx_hosts"],
+    )
 
     app.run()
 

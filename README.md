@@ -158,8 +158,8 @@ Good entry points into the system:
 - **[hrdag-monitor architecture](https://github.com/HRDAG/hrdag-monitor/blob/main/docs/ARCHITECTURE.md)** —
   how infrastructure health monitoring is structured and what each layer does
 
-- **The TUI** — run `uv run tfcs-tui --mock` in this repo to see the cluster
-  state without needing a live connection
+- **The TUI** — run `uv run tfcs-tui -c config/tfcs-tui.toml` from a tailnet
+  machine to watch cluster state in real time
 
 ---
 
@@ -170,8 +170,7 @@ repository to a machine that is authenticated to our tailnet, `cd` into
 this directory, and run this.
 
 ```bash
-uv run tfcs-tui -c config/tfcs-tui.toml   # live cluster
-uv run tfcs-tui --mock                      # offline / development
+uv run tfcs-tui -c config/tfcs-tui.toml
 ```
 
 The dashboard shows replication progress, node health, per-org breakdown,
