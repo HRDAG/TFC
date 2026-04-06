@@ -69,9 +69,9 @@ Four tools give four different views of the same system:
 
 | Repo | What it does |
 |------|-------------|
-| [server-documentation](https://github.com/HRDAG/server-documentation) | Documents every machine we operate — hardware, network, storage, operational notes |
+| [server-documentation](https://github.com/HRDAG/server-documentation) | Documents every machine we operate: hardware, network, storage, operational notes |
 | [hrdag-ansible](https://github.com/HRDAG/hrdag-ansible) | Configures TFC machines: tailnet onboarding, SSH hardening, pipeline service deployment |
-| [hrdag-monitor](https://github.com/HRDAG/hrdag-monitor) | Daily infrastructure health reports — vendor-researched thresholds, GREEN/YELLOW/RED classification |
+| [hrdag-monitor](https://github.com/HRDAG/hrdag-monitor) | Daily infrastructure health reports: vendor-researched thresholds, GREEN/YELLOW/RED classification |
 | [filelister](https://github.com/HRDAG/filelister) | First pipeline stage: scans filesystems, catalogs file metadata into PostgreSQL |
 | [ntx](https://github.com/HRDAG/ntx) | Second stage: packages files into encrypted, signed, Bitcoin-timestamped commits |
 | [tfcs](https://github.com/HRDAG/tfcs) | Third stage: replicates commits across the coalition until every commit survives any single failure |
