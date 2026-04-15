@@ -16,6 +16,8 @@ bootstrap_peers = [
     "meerkat.hrdag.net:8098",
     "snowball.hrdag.net:8098",
     "lizo.hrdag.net:8098",
+    "ben.hrdag.net:8098",
+    "ida.hrdag.net:8098",
 ]
 
 http_port = 8099
