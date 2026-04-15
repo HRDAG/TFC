@@ -9,3 +9,6 @@ wheels/
 # Virtual environments
 .venv
 .omc/
+
+# Personal docs (not repo content)
+docs/pb-voice-guide.md
