@@ -30,4 +30,6 @@ ntx_hosts = [
     "scott.hrdag.net",
     "lizo.hrdag.net",
     "chll.hrdag.net",
+    "ida.hrdag.net",
+    "ant.hrdag.net",
 ]
