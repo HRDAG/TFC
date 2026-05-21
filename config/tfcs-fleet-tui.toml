@@ -20,7 +20,14 @@
 prometheus_url = "http://127.0.0.1:9090"
 refresh_seconds = 10
 stale_after_seconds = 120
-thresholds_path = "config/fleet-thresholds.generated.toml"
+# Per-host thermal thresholds (warn/crit) are loaded from server-documentation
+# at startup. Cells turn yellow/red when their raw value crosses the floor
+# warning_max / critical_max across the devices declared in
+# server-documentation/machines/<host>.yaml. Filesystem-fullness and load
+# thresholds are intentionally NOT here yet — they depend on pool composition
+# and workload class, not device model. Open design: a per-host operational
+# `thresholds:` block in machines/<host>.yaml upstream.
+server_documentation_path = "../server-documentation"
 
 [tfcs]
 # TEMPORARY DIRECT STATUS POLLING:

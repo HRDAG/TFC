@@ -27,6 +27,7 @@ import aiohttp
 
 from tfcs_fleet_tui.config import Host
 from tfcs_fleet_tui.model import Cell
+from tfcs_fleet_tui.serverdoc import Thresholds
 
 
 @dataclass(frozen=True)
@@ -110,6 +111,17 @@ def _temp_cell(value: float | None) -> Cell:
 
 def _pct_cell(value: float) -> Cell:
     return Cell.of(value, f"{value:.0f}%")
+
+
+def _classify(cell: Cell, t: Thresholds | None) -> Cell:
+    """Upgrade an ok cell to warn/crit when raw crosses a threshold."""
+    if t is None or cell.status != "ok" or cell.raw is None:
+        return cell
+    if t.crit is not None and cell.raw >= t.crit:
+        return Cell(value=cell.value, status="crit", raw=cell.raw)
+    if t.warn is not None and cell.raw >= t.warn:
+        return Cell(value=cell.value, status="warn", raw=cell.raw)
+    return cell
 
 
 async def fetch_freshness(
@@ -211,10 +223,11 @@ async def _fetch_hwmon_temps(
     prometheus_url: str,
     hosts: dict[str, Host],
     sensor_key: str,
+    metric_key: str,
     queries: tuple[str, ...],
     timeout_seconds: int,
 ) -> dict[str, Cell]:
-    """Common temperature-fetch path: respect sensor capability + format."""
+    """Common temperature-fetch path: respect sensor capability, format, classify."""
     if not hosts:
         return {}
 
@@ -234,7 +247,10 @@ async def _fetch_hwmon_temps(
         if not host.has(sensor_key):
             cells[name] = Cell.absent()
             continue
-        cells[name] = _temp_cell(temps_by_host.get(name))
+        cells[name] = _classify(
+            _temp_cell(temps_by_host.get(name)),
+            host.threshold(metric_key),
+        )
     return cells
 
 
@@ -250,7 +266,9 @@ async def fetch_cpu_temps(
         f'max by (instance) (node_hwmon_temp_celsius{{instance=~"{regex}",chip=~"{chip_regex}"}})',
         f'max by (instance) (sensors_temp_input{{instance=~"{regex}",chip=~"{chip_regex}"}})',
     )
-    return await _fetch_hwmon_temps(prometheus_url, hosts, "cpu", queries, timeout_seconds)
+    return await _fetch_hwmon_temps(
+        prometheus_url, hosts, "cpu", "cpu_temp", queries, timeout_seconds,
+    )
 
 
 async def fetch_hdd_temps(
@@ -267,7 +285,9 @@ async def fetch_hdd_temps(
         f'smartctl_device{{instance=~"{regex}",form_factor="3.5 inches"}}'
         ')'
     )
-    return await _fetch_hwmon_temps(prometheus_url, hosts, "hdd", (query,), timeout_seconds)
+    return await _fetch_hwmon_temps(
+        prometheus_url, hosts, "hdd", "hdd_temp", (query,), timeout_seconds,
+    )
 
 
 async def fetch_nvme_temps(
@@ -282,7 +302,9 @@ async def fetch_nvme_temps(
         f'smartctl_device_temperature{{instance=~"{regex}",device=~"nvme.*",temperature_type="current"}}'
         ')'
     )
-    return await _fetch_hwmon_temps(prometheus_url, hosts, "nvme", (query,), timeout_seconds)
+    return await _fetch_hwmon_temps(
+        prometheus_url, hosts, "nvme", "nvme_temp", (query,), timeout_seconds,
+    )
 
 
 async def fetch_nic_temps(
@@ -300,7 +322,9 @@ async def fetch_nic_temps(
         f'node_hwmon_chip_names{{instance=~"{regex}",chip_name=~"{nic_chip_regex}"}}'
         ')'
     )
-    return await _fetch_hwmon_temps(prometheus_url, hosts, "nic", (query,), timeout_seconds)
+    return await _fetch_hwmon_temps(
+        prometheus_url, hosts, "nic", "nic_temp", (query,), timeout_seconds,
+    )
 
 
 async def fetch_filesystems(
