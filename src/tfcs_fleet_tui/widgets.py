@@ -11,11 +11,26 @@ from __future__ import annotations
 
 from textual.widgets import DataTable
 
-from tfcs_fleet_tui.model import FleetSnapshot
+from tfcs_fleet_tui.model import Cell, FleetSnapshot
+
+
+_METRIC_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("last", "last_update"),
+    ("up", "up"),
+    ("load", "load"),
+    ("cpu", "cpu_temp"),
+    ("hdd", "hdd_temp"),
+    ("ssd", "ssd_temp"),
+    ("nvme", "nvme_temp"),
+    ("nic", "nic"),
+    ("root", "root"),
+    ("data", "data"),
+    ("pulls", "pulls"),
+)
 
 
 class FleetTable(DataTable):
-    """Single-table fleet health mock."""
+    """Single-table fleet health view."""
 
     DEFAULT_CSS = """
     FleetTable {
@@ -53,50 +68,26 @@ class FleetTable(DataTable):
             self.columns[col_key].content_align = ("right", "middle")
 
     def refresh_data(self, snapshot: FleetSnapshot) -> None:
-        if self.row_count == 0:
-            for node in snapshot.nodes:
-                self._add_node_row(node)
-            return
-
         for node in snapshot.nodes:
             if node.host not in self._hosts:
                 self._add_node_row(node)
                 continue
             self.update_cell(node.host, "host", node.host)
-            self.update_cell(node.host, "last", node.last_update)
-            self.update_cell(node.host, "up", node.up)
-            self.update_cell(node.host, "load", node.load)
-            self.update_cell(node.host, "cpu", node.cpu_temp)
-            self.update_cell(node.host, "hdd", node.hdd_temp)
-            self.update_cell(node.host, "ssd", node.ssd_temp)
-            self.update_cell(node.host, "nvme", node.nvme_temp)
-            self.update_cell(node.host, "nic", node.nic)
-            self.update_cell(node.host, "root", node.root)
-            self.update_cell(node.host, "data", node.data)
-            self.update_cell(node.host, "pulls", node.pulls)
+            for col_key, attr in _METRIC_COLUMNS:
+                self.update_cell(node.host, col_key, getattr(node, attr).value)
             self.update_cell(node.host, "note", node.note)
 
-    def update_pulls(self, pulls: dict[str, str]) -> None:
+    def update_pulls(self, pulls: dict[str, Cell]) -> None:
         """Update only the Pulls column."""
-        for host, value in pulls.items():
+        for host, cell in pulls.items():
             if host in self._hosts:
-                self.update_cell(host, "pulls", value)
+                self.update_cell(host, "pulls", cell.value)
 
     def _add_node_row(self, node) -> None:
         """Add a fully populated row for one host."""
         self.add_row(
             node.host,
-            node.last_update,
-            node.up,
-            node.load,
-            node.cpu_temp,
-            node.hdd_temp,
-            node.ssd_temp,
-            node.nvme_temp,
-            node.nic,
-            node.root,
-            node.data,
-            node.pulls,
+            *(getattr(node, attr).value for _, attr in _METRIC_COLUMNS),
             node.note,
             key=node.host,
         )

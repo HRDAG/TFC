@@ -5,20 +5,46 @@
 # ---
 # src/tfcs_fleet_tui/model.py
 
-"""Fleet dashboard data model.
-
-The first implementation is populated by a static fixture. Prometheus polling
-should fill this same model later so the UI does not care where values came
-from.
-"""
+"""Fleet dashboard data model."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Literal
 
 
 NOT_EXPECTED = "--"
 EXPECTED_MISSING = "?"
+
+CellStatus = Literal["ok", "warn", "crit", "missing", "absent"]
+
+
+@dataclass(frozen=True)
+class Cell:
+    """One displayable cell: rendered text plus its threshold/availability state."""
+
+    value: str
+    status: CellStatus = "ok"
+
+    @classmethod
+    def absent(cls) -> "Cell":
+        return cls(value=NOT_EXPECTED, status="absent")
+
+    @classmethod
+    def missing(cls) -> "Cell":
+        return cls(value=EXPECTED_MISSING, status="missing")
+
+    @classmethod
+    def from_str(cls, value: str) -> "Cell":
+        if value == NOT_EXPECTED:
+            return cls.absent()
+        if value == EXPECTED_MISSING:
+            return cls.missing()
+        return cls(value=value, status="ok")
+
+
+ABSENT = Cell.absent()
+MISSING = Cell.missing()
 
 
 @dataclass(frozen=True)
@@ -27,17 +53,17 @@ class FleetNode:
 
     host: str
     roles: tuple[str, ...] = field(default_factory=tuple)
-    last_update: str = EXPECTED_MISSING
-    up: str = "--"
-    load: str = "--"
-    cpu_temp: str = "--"
-    hdd_temp: str = "--"
-    ssd_temp: str = "--"
-    nvme_temp: str = "--"
-    nic: str = "--"
-    root: str = "--"
-    data: str = "--"
-    pulls: str = "--"
+    last_update: Cell = MISSING
+    up: Cell = ABSENT
+    load: Cell = ABSENT
+    cpu_temp: Cell = ABSENT
+    hdd_temp: Cell = ABSENT
+    ssd_temp: Cell = ABSENT
+    nvme_temp: Cell = ABSENT
+    nic: Cell = ABSENT
+    root: Cell = ABSENT
+    data: Cell = ABSENT
+    pulls: Cell = ABSENT
     note: str = ""
 
 

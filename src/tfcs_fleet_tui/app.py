@@ -15,7 +15,7 @@ from textual.widgets import Footer, Header, Static
 
 from tfcs_fleet_tui.config import FleetConfig, load_config
 from tfcs_fleet_tui.mock_data import MOCK_SNAPSHOT
-from tfcs_fleet_tui.model import FleetNode, FleetSnapshot
+from tfcs_fleet_tui.model import Cell, FleetNode, FleetSnapshot
 from tfcs_fleet_tui.prometheus import (
     HostFreshness,
     fetch_cpu_temps,
@@ -208,7 +208,9 @@ class FleetDashboard(App):
                 }
             except Exception:
                 tfcs_status = "unreachable"
-            self.query_one(FleetTable).update_pulls(self._last_pulls)
+            self.query_one(FleetTable).update_pulls(
+                {host: Cell.from_str(value) for host, value in self._last_pulls.items()}
+            )
             self._update_source_bar(
                 self._status_line(
                     freshness_status,
@@ -285,17 +287,17 @@ class FleetDashboard(App):
                 FleetNode(
                     host=host,
                     roles=fixture.roles,
-                    last_update=prom_values[0],
-                    up=prom_values[1],
-                    load=prom_values[2],
-                    cpu_temp=prom_values[3],
-                    hdd_temp=prom_values[4],
+                    last_update=Cell.from_str(prom_values[0]),
+                    up=Cell.from_str(prom_values[1]),
+                    load=Cell.from_str(prom_values[2]),
+                    cpu_temp=Cell.from_str(prom_values[3]),
+                    hdd_temp=Cell.from_str(prom_values[4]),
                     ssd_temp=fixture.ssd_temp,
-                    nvme_temp=prom_values[5],
-                    nic=prom_values[6],
-                    root=prom_values[7],
-                    data=prom_values[8],
-                    pulls=pulls.get(host, "?"),
+                    nvme_temp=Cell.from_str(prom_values[5]),
+                    nic=Cell.from_str(prom_values[6]),
+                    root=Cell.from_str(prom_values[7]),
+                    data=Cell.from_str(prom_values[8]),
+                    pulls=Cell.from_str(pulls.get(host, "?")),
                     note=note,
                 )
             )
