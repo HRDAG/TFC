@@ -16,6 +16,8 @@ from typing import Any
 
 import aiohttp
 
+from tfcs_fleet_tui.model import Cell
+
 
 @dataclass(frozen=True)
 class PullSummary:
@@ -46,6 +48,12 @@ def format_pull_summary(summary: PullSummary | None) -> str:
     if summary.bytes_per_second <= 0:
         return str(summary.puller_count)
     return f"{summary.puller_count}/{_format_rate(summary.bytes_per_second)}"
+
+
+def pull_cell(summary: PullSummary | None) -> Cell:
+    """Build a Cell carrying both the display text and the puller count as raw."""
+    count = 0 if summary is None else summary.puller_count
+    return Cell.of(count, format_pull_summary(summary))
 
 
 async def _fetch_status(

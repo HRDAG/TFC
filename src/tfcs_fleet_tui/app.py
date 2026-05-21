@@ -18,7 +18,7 @@ from textual.binding import Binding
 from textual.widgets import Footer, Header, Static
 
 from tfcs_fleet_tui.config import FleetConfig, Host, load_config
-from tfcs_fleet_tui.model import ABSENT, Cell, FleetNode, FleetSnapshot
+from tfcs_fleet_tui.model import ABSENT, MISSING, Cell, FleetNode, FleetSnapshot
 from tfcs_fleet_tui.prometheus import (
     HostFreshness,
     fetch_cpu_temps,
@@ -29,7 +29,7 @@ from tfcs_fleet_tui.prometheus import (
     fetch_nic_temps,
     fetch_nvme_temps,
 )
-from tfcs_fleet_tui.tfcs import fetch_pull_summaries, format_pull_summary
+from tfcs_fleet_tui.tfcs import fetch_pull_summaries, pull_cell
 from tfcs_fleet_tui.widgets import FleetTable
 
 
@@ -96,13 +96,13 @@ class FleetDashboard(App):
         self._config = config
         self._has_rendered_snapshot = False
         self._last_freshness: dict[str, HostFreshness] = {}
-        self._last_loads: dict[str, str] = {}
-        self._last_cpu_temps: dict[str, str] = {}
-        self._last_hdd_temps: dict[str, str] = {}
-        self._last_nvme_temps: dict[str, str] = {}
-        self._last_nic_temps: dict[str, str] = {}
-        self._last_filesystems: dict[str, dict[str, str]] = {}
-        self._last_pulls: dict[str, str] = {}
+        self._last_loads: dict[str, Cell] = {}
+        self._last_cpu_temps: dict[str, Cell] = {}
+        self._last_hdd_temps: dict[str, Cell] = {}
+        self._last_nvme_temps: dict[str, Cell] = {}
+        self._last_nic_temps: dict[str, Cell] = {}
+        self._last_filesystems: dict[str, dict[str, Cell]] = {}
+        self._last_pulls: dict[str, Cell] = {}
 
     def on_mount(self) -> None:
         self.action_refresh()
@@ -145,15 +145,12 @@ class FleetDashboard(App):
                 tfcs_fqdns, self._config.tfcs_port, timeout_seconds=1,
             )
             self._last_pulls = {
-                name: format_pull_summary(pull_summaries.get(name))
-                for name in hosts
+                name: pull_cell(pull_summaries.get(name)) for name in hosts
             }
         except Exception:
             tfcs_status = "unreachable"
 
-        self.query_one(FleetTable).update_pulls(
-            {name: Cell.from_str(v) for name, v in self._last_pulls.items()}
-        )
+        self.query_one(FleetTable).update_pulls(self._last_pulls)
         self._update_source_bar(self._status_line(statuses, tfcs_status))
 
     def _build_snapshot(self, prom_status_line: str) -> FleetSnapshot:
@@ -162,19 +159,20 @@ class FleetDashboard(App):
             fresh = self._last_freshness.get(name)
             fs = self._last_filesystems.get(name, {})
             cells = (
-                Cell.from_str(fresh.last_update if fresh else "?"),
-                Cell.from_str(fresh.up if fresh else "?"),
-                Cell.from_str(self._last_loads.get(name, "?")),
-                Cell.from_str(self._last_cpu_temps.get(name, "?")),
-                Cell.from_str(self._last_hdd_temps.get(name, "?")),
-                Cell.from_str(self._last_nvme_temps.get(name, "?")),
-                Cell.from_str(self._last_nic_temps.get(name, "?")),
-                Cell.from_str(fs.get("root", "?")),
-                Cell.from_str(fs.get("data", "?")),
-                Cell.from_str(self._last_pulls.get(name, "?")),
+                fresh.last_update if fresh else MISSING,
+                fresh.up if fresh else MISSING,
+                self._last_loads.get(name, MISSING),
+                self._last_cpu_temps.get(name, MISSING),
+                self._last_hdd_temps.get(name, MISSING),
+                self._last_nvme_temps.get(name, MISSING),
+                self._last_nic_temps.get(name, MISSING),
+                fs.get("root", MISSING),
+                fs.get("data", MISSING),
+                self._last_pulls.get(name, MISSING),
             )
             note = "no prom data" if all(c.status == "missing" for c in cells) else ""
             (last_update, up, load, cpu, hdd, nvme, nic, root, data, pulls) = cells
+            # ssd_temp has no fetcher yet; left absent until a real SSD path lands.
             nodes.append(FleetNode(
                 host=name,
                 last_update=last_update, up=up, load=load,

@@ -11,10 +11,11 @@ The dashboard only talks to the configured Prometheus API. Instance values
 such as ``chll.hrdag.net:9100`` are label values in scott's Prometheus, not
 network endpoints contacted by this TUI.
 
-Each fetch takes ``hosts: dict[name, Host]`` and returns ``dict[name, str]``
-(formatted display values). Sensor presence is consulted on the Host so
-that "absent" (sensor not declared) renders as ``--`` and "missing"
-(declared but no Prom sample) renders as ``?``.
+Each fetch takes ``hosts: dict[name, Host]`` and returns ``dict[name, Cell]``
+(rendered value + status + raw numeric). The raw numeric makes per-host
+thresholds a direct comparison once they land; until then everything is
+"ok" by default, with the stale_after_seconds boundary already classifying
+freshness into "warn"/"crit".
 """
 
 from __future__ import annotations
@@ -25,14 +26,15 @@ from dataclasses import dataclass
 import aiohttp
 
 from tfcs_fleet_tui.config import Host
+from tfcs_fleet_tui.model import Cell
 
 
 @dataclass(frozen=True)
 class HostFreshness:
     """Prometheus freshness state for one host."""
 
-    up: str
-    last_update: str
+    up: Cell
+    last_update: Cell
 
 
 def _instance_regex(instances: list[str]) -> str:
@@ -56,10 +58,8 @@ def _hosts_regex(hosts: dict[str, Host]) -> str:
     return _instance_regex([host.instance for host in hosts.values()])
 
 
-def _format_age(seconds: float | None) -> str:
+def _format_age(seconds: float) -> str:
     """Format scrape age for the Last column."""
-    if seconds is None:
-        return "?"
     if seconds < 60:
         return f"{max(0, int(seconds))}s"
     if seconds < 3600:
@@ -104,8 +104,12 @@ def _sample_values_by_host(
     return values
 
 
-def _format_temp(value: float | None) -> str:
-    return "?" if value is None else f"{value:.0f}C"
+def _temp_cell(value: float | None) -> Cell:
+    return Cell.missing() if value is None else Cell.of(value, f"{value:.0f}C")
+
+
+def _pct_cell(value: float) -> Cell:
+    return Cell.of(value, f"{value:.0f}%")
 
 
 async def fetch_freshness(
@@ -137,15 +141,25 @@ async def fetch_freshness(
         age = age_by_host.get(name)
         up_value = up_by_host.get(name)
         if up_value is None and age is None:
-            freshness[name] = HostFreshness(up="?", last_update="?")
-        elif age is not None and age > stale_after_seconds:
-            freshness[name] = HostFreshness(up="stale", last_update=_format_age(age))
+            freshness[name] = HostFreshness(up=Cell.missing(), last_update=Cell.missing())
+            continue
+        last = (
+            Cell.of(age, _format_age(age)) if age is not None else Cell.missing()
+        )
+        if age is not None and age > stale_after_seconds:
+            freshness[name] = HostFreshness(
+                up=Cell.of(None, "stale", status="warn"),
+                last_update=Cell.of(age, _format_age(age), status="warn"),
+            )
         elif up_value == 1:
-            freshness[name] = HostFreshness(up="ok", last_update=_format_age(age))
+            freshness[name] = HostFreshness(up=Cell.of(1, "ok"), last_update=last)
         elif up_value == 0:
-            freshness[name] = HostFreshness(up="down", last_update=_format_age(age))
+            freshness[name] = HostFreshness(
+                up=Cell.of(0, "down", status="crit"),
+                last_update=last,
+            )
         else:
-            freshness[name] = HostFreshness(up="?", last_update=_format_age(age))
+            freshness[name] = HostFreshness(up=Cell.missing(), last_update=last)
 
     return freshness
 
@@ -154,7 +168,7 @@ async def fetch_load(
     prometheus_url: str,
     hosts: dict[str, Host],
     timeout_seconds: int = 5,
-) -> dict[str, str]:
+) -> dict[str, Cell]:
     """Fetch load1 and CPU-core counts for configured hosts."""
     if not hosts:
         return {}
@@ -177,67 +191,74 @@ async def fetch_load(
     load_by_host = _sample_values_by_host(load_results, instance_to_host)
     cores_by_host = _sample_values_by_host(cores_results, instance_to_host)
 
-    loads: dict[str, str] = {}
+    cells: dict[str, Cell] = {}
     for name in hosts:
         load = load_by_host.get(name)
         cores = cores_by_host.get(name)
         if load is None and cores is None:
-            loads[name] = "?"
+            cells[name] = Cell.missing()
         elif load is None:
-            loads[name] = f"?/{int(cores)}" if cores else "?/?"
+            text = f"?/{int(cores)}" if cores else "?/?"
+            cells[name] = Cell.of(None, text, status="missing")
         elif cores is None:
-            loads[name] = f"{load:.1f}/?"
+            cells[name] = Cell.of(load, f"{load:.1f}/?")
         else:
-            loads[name] = f"{load:.1f}/{int(cores)}"
-    return loads
+            cells[name] = Cell.of(load, f"{load:.1f}/{int(cores)}")
+    return cells
+
+
+async def _fetch_hwmon_temps(
+    prometheus_url: str,
+    hosts: dict[str, Host],
+    sensor_key: str,
+    queries: tuple[str, ...],
+    timeout_seconds: int,
+) -> dict[str, Cell]:
+    """Common temperature-fetch path: respect sensor capability + format."""
+    if not hosts:
+        return {}
+
+    instance_to_host = _instance_to_host(hosts)
+    async with aiohttp.ClientSession() as session:
+        results = await asyncio.gather(
+            *(_query(session, prometheus_url, q, timeout_seconds) for q in queries)
+        )
+
+    temps_by_host: dict[str, float] = {}
+    for batch in results:
+        for name, value in _sample_values_by_host(batch, instance_to_host).items():
+            temps_by_host.setdefault(name, value)
+
+    cells: dict[str, Cell] = {}
+    for name, host in hosts.items():
+        if not host.has(sensor_key):
+            cells[name] = Cell.absent()
+            continue
+        cells[name] = _temp_cell(temps_by_host.get(name))
+    return cells
 
 
 async def fetch_cpu_temps(
     prometheus_url: str,
     hosts: dict[str, Host],
     timeout_seconds: int = 5,
-) -> dict[str, str]:
+) -> dict[str, Cell]:
     """Fetch max CPU temperature per configured host."""
-    if not hosts:
-        return {}
-
-    instance_to_host = _instance_to_host(hosts)
     regex = _hosts_regex(hosts)
     chip_regex = ".*(coretemp|k10temp).*|pci0000:00_0000:00:18_3|thermal_thermal_zone0"
     queries = (
         f'max by (instance) (node_hwmon_temp_celsius{{instance=~"{regex}",chip=~"{chip_regex}"}})',
         f'max by (instance) (sensors_temp_input{{instance=~"{regex}",chip=~"{chip_regex}"}})',
     )
-
-    async with aiohttp.ClientSession() as session:
-        primary_results, fallback_results = await asyncio.gather(
-            _query(session, prometheus_url, queries[0], timeout_seconds),
-            _query(session, prometheus_url, queries[1], timeout_seconds),
-        )
-
-    temps_by_host = _sample_values_by_host(primary_results, instance_to_host)
-    fallback_by_host = _sample_values_by_host(fallback_results, instance_to_host)
-
-    temps: dict[str, str] = {}
-    for name, host in hosts.items():
-        if not host.has("cpu"):
-            temps[name] = "--"
-            continue
-        temp = temps_by_host.get(name, fallback_by_host.get(name))
-        temps[name] = _format_temp(temp)
-    return temps
+    return await _fetch_hwmon_temps(prometheus_url, hosts, "cpu", queries, timeout_seconds)
 
 
 async def fetch_hdd_temps(
     prometheus_url: str,
     hosts: dict[str, Host],
     timeout_seconds: int = 5,
-) -> dict[str, str]:
+) -> dict[str, Cell]:
     """Fetch max SATA/SAS HDD temperature per configured host."""
-    if not hosts:
-        return {}
-
-    instance_to_host = _instance_to_host(hosts)
     regex = _hosts_regex(hosts)
     query = (
         'max by (instance) ('
@@ -246,60 +267,30 @@ async def fetch_hdd_temps(
         f'smartctl_device{{instance=~"{regex}",form_factor="3.5 inches"}}'
         ')'
     )
-
-    async with aiohttp.ClientSession() as session:
-        results = await _query(session, prometheus_url, query, timeout_seconds)
-
-    temps_by_host = _sample_values_by_host(results, instance_to_host)
-    temps: dict[str, str] = {}
-    for name, host in hosts.items():
-        if not host.has("hdd"):
-            temps[name] = "--"
-            continue
-        temps[name] = _format_temp(temps_by_host.get(name))
-    return temps
+    return await _fetch_hwmon_temps(prometheus_url, hosts, "hdd", (query,), timeout_seconds)
 
 
 async def fetch_nvme_temps(
     prometheus_url: str,
     hosts: dict[str, Host],
     timeout_seconds: int = 5,
-) -> dict[str, str]:
+) -> dict[str, Cell]:
     """Fetch max NVMe temperature per configured host."""
-    if not hosts:
-        return {}
-
-    instance_to_host = _instance_to_host(hosts)
     regex = _hosts_regex(hosts)
     query = (
         'max by (instance) ('
         f'smartctl_device_temperature{{instance=~"{regex}",device=~"nvme.*",temperature_type="current"}}'
         ')'
     )
-
-    async with aiohttp.ClientSession() as session:
-        results = await _query(session, prometheus_url, query, timeout_seconds)
-
-    temps_by_host = _sample_values_by_host(results, instance_to_host)
-    temps: dict[str, str] = {}
-    for name, host in hosts.items():
-        if not host.has("nvme"):
-            temps[name] = "--"
-            continue
-        temps[name] = _format_temp(temps_by_host.get(name))
-    return temps
+    return await _fetch_hwmon_temps(prometheus_url, hosts, "nvme", (query,), timeout_seconds)
 
 
 async def fetch_nic_temps(
     prometheus_url: str,
     hosts: dict[str, Host],
     timeout_seconds: int = 5,
-) -> dict[str, str]:
+) -> dict[str, Cell]:
     """Fetch max NIC temperature per configured host."""
-    if not hosts:
-        return {}
-
-    instance_to_host = _instance_to_host(hosts)
     regex = _hosts_regex(hosts)
     nic_chip_regex = "bnxt_en|ice|en.*|eth.*"
     query = (
@@ -309,25 +300,14 @@ async def fetch_nic_temps(
         f'node_hwmon_chip_names{{instance=~"{regex}",chip_name=~"{nic_chip_regex}"}}'
         ')'
     )
-
-    async with aiohttp.ClientSession() as session:
-        results = await _query(session, prometheus_url, query, timeout_seconds)
-
-    temps_by_host = _sample_values_by_host(results, instance_to_host)
-    temps: dict[str, str] = {}
-    for name, host in hosts.items():
-        if not host.has("nic"):
-            temps[name] = "--"
-            continue
-        temps[name] = _format_temp(temps_by_host.get(name))
-    return temps
+    return await _fetch_hwmon_temps(prometheus_url, hosts, "nic", (query,), timeout_seconds)
 
 
 async def fetch_filesystems(
     prometheus_url: str,
     hosts: dict[str, Host],
     timeout_seconds: int = 5,
-) -> dict[str, dict[str, str]]:
+) -> dict[str, dict[str, Cell]]:
     """Fetch configured root/data filesystem usage percentages.
 
     For ZFS-backed mountpoints, aggregate at the pool level (identified by the
@@ -393,23 +373,23 @@ async def fetch_filesystems(
             continue
         zfs_by_pool.setdefault((name, pool), []).append(sample)
 
-    values: dict[str, dict[str, str]] = {}
+    values: dict[str, dict[str, Cell]] = {}
     for name, host in hosts.items():
         values[name] = {}
         for column in ("root", "data"):
             mountpoint = host.mounts.get(column)
             if not mountpoint:
-                values[name][column] = "?"
+                values[name][column] = Cell.missing()
                 continue
             sample = samples.get((name, mountpoint))
             if not sample or "avail" not in sample or "size" not in sample:
-                values[name][column] = "?"
+                values[name][column] = Cell.missing()
                 continue
             if sample.get("fstype") == "zfs":
                 pool = str(sample["device"]).split("/", 1)[0]
                 pool_samples = zfs_by_pool.get((name, pool), [])
                 if not pool_samples:
-                    values[name][column] = "?"
+                    values[name][column] = Cell.missing()
                     continue
                 used = sum(
                     float(s["size"]) - float(s["avail"])
@@ -426,5 +406,5 @@ async def fetch_filesystems(
                 size = float(sample["size"])
                 avail = float(sample["avail"])
                 pct = 0.0 if size <= 0 else 100.0 * (1.0 - avail / size)
-            values[name][column] = f"{pct:.0f}%"
+            values[name][column] = _pct_cell(pct)
     return values

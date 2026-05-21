@@ -21,10 +21,17 @@ CellStatus = Literal["ok", "warn", "crit", "missing", "absent"]
 
 @dataclass(frozen=True)
 class Cell:
-    """One displayable cell: rendered text plus its threshold/availability state."""
+    """One displayable cell: rendered text, threshold/availability state, raw value.
+
+    ``raw`` carries the underlying numeric (celsius, percent, load1, age in seconds,
+    puller count) so that threshold comparisons can read it directly without
+    re-parsing ``value``. It is ``None`` for absent/missing cells and for cells
+    whose value has no meaningful numeric form (e.g. up="stale").
+    """
 
     value: str
     status: CellStatus = "ok"
+    raw: float | None = None
 
     @classmethod
     def absent(cls) -> "Cell":
@@ -33,6 +40,10 @@ class Cell:
     @classmethod
     def missing(cls) -> "Cell":
         return cls(value=EXPECTED_MISSING, status="missing")
+
+    @classmethod
+    def of(cls, raw: float | None, value: str, status: CellStatus = "ok") -> "Cell":
+        return cls(value=value, status=status, raw=raw)
 
     @classmethod
     def from_str(cls, value: str) -> "Cell":
