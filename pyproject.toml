@@ -19,3 +19,4 @@ build-backend = "uv_build"
 
 [project.scripts]
 tfcs-tui = "tfcs_tui.app:main"
+tfcs-fleet-tui = "tfcs_fleet_tui.app:main"

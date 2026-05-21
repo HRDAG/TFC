@@ -1,0 +1,30 @@
+#!/usr/bin/env -S /usr/local/bin/uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#   "textual>=0.50",
+#   "aiohttp>=3.9",
+#   "humanize>=4.15.0",
+# ]
+# ///
+# Author: PB and Codex
+# Date: 2026-05-18
+# License: (c) HRDAG, 2026, GPL-2 or newer
+#
+# ---
+# scripts/tfcs-fleet-tui
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+
+repo_root = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(repo_root / "src"))
+
+from tfcs_fleet_tui.app import main  # noqa: E402
+
+
+if __name__ == "__main__":
+    main()
