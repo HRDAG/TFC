@@ -19,6 +19,7 @@ bootstrap_peers = [
     "ben.hrdag.net:8098",
     "ida.hrdag.net:8098",
     "ant.hrdag.net:8098",
+    "dwight.hrdag.net:8098",
 ]
 
 http_port = 8099
@@ -32,4 +33,5 @@ ntx_hosts = [
     "chll.hrdag.net",
     "ida.hrdag.net",
     "ant.hrdag.net",
+    "dwight.hrdag.net",
 ]

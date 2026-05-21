@@ -133,26 +133,32 @@ class ReplicationChart(Static):
 
         # --- Site distribution histogram ---
         if site_dist:
-            site_bins = {1: 0, 2: 0, 3: 0, 4: 0}
+            # site_distribution[k] from /replication = number of commits whose
+            # copies span exactly k distinct clusters. 0 means no holder is
+            # alive in the cluster snapshot — catastrophic, distinct from
+            # local-only (1 site). The previous bucketing rolled 0 into 1.
+            site_bins = {0: 0, 1: 0, 2: 0, 3: 0}
             for sites, count in site_dist.items():
-                if sites <= 1:
+                if sites <= 0:
+                    site_bins[0] += count
+                elif sites == 1:
                     site_bins[1] += count
-                elif sites < 4:
-                    site_bins[sites] = count
+                elif sites == 2:
+                    site_bins[2] += count
                 else:
-                    site_bins[4] += count
+                    site_bins[3] += count
 
             self._update_changes(site_bins, self._prev_site_bins, self._site_bin_changes, now)
             self._prev_site_bins = site_bins.copy()
 
-            site_labels = {1: "1 site", 2: "2 sites", 3: "3 sites", 4: "4+ sites"}
-            site_styles = {1: "bold red", 2: "yellow", 3: "bright_yellow", 4: "green"}
+            site_labels = {0: "0 sites", 1: "1 site", 2: "2 sites", 3: "3+ sites"}
+            site_styles = {0: "bold red", 1: "red", 2: "yellow", 3: "green"}
 
             lines.append(Text(""))
             lines.append(Text("  site copies (target: ≥2 sites)", style="bold"))
             lines.extend(self._render_histogram(
                 site_bins, site_labels, site_styles, self._site_bin_changes, now,
-                alarm_bins={1},
+                alarm_bins={0, 1},
             ))
 
         self.update(Text("\n").join(lines))
@@ -208,17 +214,23 @@ class ClusterOverview(Static):
         sat_text.append(f"  Unsatisfied: ", style="")
         sat_text.append(f"{unsatisfied:,}", style="yellow" if unsatisfied > 0 else "green")
         lines.append(sat_text)
-        # Line 3: site distribution
+        # Line 3: site distribution. site_distribution[k] = commits whose
+        # holders span exactly k clusters; 0 means no holder is alive in the
+        # cluster snapshot (catastrophic, distinct from local-only).
         if site_dist:
             site_total = sum(site_dist.values())
+            zero_site = site_dist.get(0, 0)
             single_site = site_dist.get(1, 0)
-            multi_site = site_total - single_site
+            multi_site = sum(c for k, c in site_dist.items() if k >= 2)
             multi_pct = round(multi_site / site_total * 100, 1) if site_total else 0.0
             site_text = Text()
             site_text.append("Site-distributed (≥2 sites): ", style="")
             site_text.append(f"{multi_site:,} ({multi_pct}%)", style="green")
             site_text.append("  Single-site: ", style="")
             site_text.append(str(single_site), style="red bold" if single_site > 0 else "green")
+            if zero_site > 0:
+                site_text.append("  No-site: ", style="")
+                site_text.append(str(zero_site), style="red bold")
             lines.append(site_text)
         # Line 4: velocity + ETA (compact)
         if velocity_data is not None:
@@ -1175,6 +1187,7 @@ class OrgsTable(DataTable):
         self.add_column("2cp", width=6, key="cp2")
         self.add_column("3cp", width=6, key="cp3")
         self.add_column("≥4cp", width=7, key="cp4")
+        self.add_column("0-site", width=7, key="s0")
         self.add_column("1-site", width=7, key="s1")
         self.add_column("2-site", width=7, key="s2")
         self.add_column("3-site", width=7, key="s3")
@@ -1197,6 +1210,7 @@ class OrgsTable(DataTable):
             cp3 = sum(v for k, v in dist.items() if k == 3)
             cp4 = sum(v for k, v in dist.items() if k >= 4)
 
+            s0 = site_dist.get(0, 0)
             s1 = site_dist.get(1, 0)
             s2 = site_dist.get(2, 0)
             s3 = site_dist.get(3, 0)
@@ -1212,7 +1226,8 @@ class OrgsTable(DataTable):
                 cell(cp2, "yellow"),
                 cell(cp3, "yellow"),
                 cell(cp4, "green"),
-                cell(s1, "red bold"),
+                cell(s0, "red bold"),
+                cell(s1, "red"),
                 cell(s2, "yellow"),
                 cell(s3, "green"),
                 cell(s4, "green"),
