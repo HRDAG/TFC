@@ -13,8 +13,8 @@ from dataclasses import dataclass
 from typing import Literal
 
 
-NOT_EXPECTED = "--"
-EXPECTED_MISSING = "?"
+ABSENT_STR = "--"
+MISSING_STR = "?"
 
 CellStatus = Literal["ok", "warn", "crit", "missing", "absent"]
 
@@ -35,11 +35,11 @@ class Cell:
 
     @classmethod
     def absent(cls) -> "Cell":
-        return cls(value=NOT_EXPECTED, status="absent")
+        return cls(value=ABSENT_STR, status="absent")
 
     @classmethod
     def missing(cls) -> "Cell":
-        return cls(value=EXPECTED_MISSING, status="missing")
+        return cls(value=MISSING_STR, status="missing")
 
     @classmethod
     def of(cls, raw: float | None, value: str, status: CellStatus = "ok") -> "Cell":
@@ -47,9 +47,9 @@ class Cell:
 
     @classmethod
     def from_str(cls, value: str) -> "Cell":
-        if value == NOT_EXPECTED:
+        if value == ABSENT_STR:
             return cls.absent()
-        if value == EXPECTED_MISSING:
+        if value == MISSING_STR:
             return cls.missing()
         return cls(value=value, status="ok")
 

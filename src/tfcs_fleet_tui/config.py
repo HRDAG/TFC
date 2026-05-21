@@ -57,10 +57,6 @@ class FleetConfig:
     sort: str
     temperature_unit: str
 
-    @property
-    def host_instances(self) -> dict[str, str]:
-        return {name: host.instance for name, host in self.hosts.items()}
-
 
 def _parse_host(name: str, raw: dict) -> Host:
     sensors = {key: True for key in SENSOR_KEYS}
