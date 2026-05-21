@@ -1,5 +1,5 @@
 # Author: PB and Codex
-# Date: 2026-05-18
+# Date: 2026-05-21
 # License: (c) HRDAG, 2026, GPL-2 or newer
 #
 # ---
@@ -14,8 +14,7 @@ from textual.binding import Binding
 from textual.widgets import Footer, Header, Static
 
 from tfcs_fleet_tui.config import FleetConfig, load_config
-from tfcs_fleet_tui.mock_data import MOCK_SNAPSHOT
-from tfcs_fleet_tui.model import Cell, FleetNode, FleetSnapshot
+from tfcs_fleet_tui.model import ABSENT, MISSING, Cell, FleetNode, FleetSnapshot
 from tfcs_fleet_tui.prometheus import (
     HostFreshness,
     fetch_cpu_temps,
@@ -41,9 +40,7 @@ class FleetDashboard(App):
     ]
 
     DEFAULT_CSS = """
-    Screen {
-        layout: vertical;
-    }
+    Screen { layout: vertical; }
     #title-bar {
         background: blue;
         color: white;
@@ -76,7 +73,7 @@ class FleetDashboard(App):
         self._last_nvme_temps = self._unknown_values()
         self._last_nic_temps = self._unknown_values()
         self._last_filesystems = self._unknown_filesystems()
-        self._last_pulls = self._unknown_values()
+        self._last_pulls: dict[str, str] = {name: "?" for name in self._config.hosts}
 
     def on_mount(self) -> None:
         self.action_refresh()
@@ -93,12 +90,15 @@ class FleetDashboard(App):
                     nvme_temps=self._unknown_values(),
                     nic_temps=self._unknown_values(),
                     filesystems=self._unknown_filesystems(),
-                    pulls=self._unknown_values(),
+                    pulls=self._last_pulls,
                     prom_status="freshness=checking, load=checking, cpu=checking",
                 )
             )
 
         async def refresh_from_prometheus() -> None:
+            hosts = self._config.hosts
+            prom_url = self._config.prometheus_url
+
             freshness_status = "ok"
             load_status = "ok"
             cpu_status = "ok"
@@ -106,120 +106,78 @@ class FleetDashboard(App):
             nvme_status = "ok"
             nic_status = "ok"
             fs_status = "ok"
-            freshness = self._last_freshness
-            loads = self._last_loads
-            cpu_temps = self._last_cpu_temps
-            hdd_temps = self._last_hdd_temps
-            nvme_temps = self._last_nvme_temps
-            nic_temps = self._last_nic_temps
-            filesystems = self._last_filesystems
+
             try:
-                freshness = await fetch_freshness(
-                    self._config.prometheus_url,
-                    self._config.host_instances,
-                    self._config.stale_after_seconds,
+                self._last_freshness = await fetch_freshness(
+                    prom_url, hosts, self._config.stale_after_seconds,
                 )
-                self._last_freshness = freshness
             except Exception:
                 freshness_status = "unreachable"
             try:
-                loads = await fetch_load(
-                    self._config.prometheus_url,
-                    self._config.host_instances,
-                )
-                self._last_loads = loads
+                self._last_loads = await fetch_load(prom_url, hosts)
             except Exception:
                 load_status = "unreachable"
             try:
-                cpu_temps = await fetch_cpu_temps(
-                    self._config.prometheus_url,
-                    self._config.host_instances,
-                )
-                self._last_cpu_temps = cpu_temps
+                self._last_cpu_temps = await fetch_cpu_temps(prom_url, hosts)
             except Exception:
                 cpu_status = "unreachable"
             try:
-                hdd_temps = await fetch_hdd_temps(
-                    self._config.prometheus_url,
-                    self._config.host_instances,
-                    self._config.no_hdd_hosts,
-                )
-                self._last_hdd_temps = hdd_temps
+                self._last_hdd_temps = await fetch_hdd_temps(prom_url, hosts)
             except Exception:
                 hdd_status = "unreachable"
             try:
-                nvme_temps = await fetch_nvme_temps(
-                    self._config.prometheus_url,
-                    self._config.host_instances,
-                )
-                self._last_nvme_temps = nvme_temps
+                self._last_nvme_temps = await fetch_nvme_temps(prom_url, hosts)
             except Exception:
                 nvme_status = "unreachable"
             try:
-                nic_temps = await fetch_nic_temps(
-                    self._config.prometheus_url,
-                    self._config.host_instances,
-                    self._config.no_nic_hosts,
-                )
-                self._last_nic_temps = nic_temps
+                self._last_nic_temps = await fetch_nic_temps(prom_url, hosts)
             except Exception:
                 nic_status = "unreachable"
             try:
-                filesystems = await fetch_filesystems(
-                    self._config.prometheus_url,
-                    self._config.host_instances,
-                    self._config.filesystems,
-                )
-                self._last_filesystems = filesystems
+                self._last_filesystems = await fetch_filesystems(prom_url, hosts)
             except Exception:
                 fs_status = "unreachable"
+
             self._render_snapshot(
                 self._build_snapshot(
-                    freshness=freshness,
-                    loads=loads,
-                    cpu_temps=cpu_temps,
-                    hdd_temps=hdd_temps,
-                    nvme_temps=nvme_temps,
-                    nic_temps=nic_temps,
-                    filesystems=filesystems,
+                    freshness=self._last_freshness,
+                    loads=self._last_loads,
+                    cpu_temps=self._last_cpu_temps,
+                    hdd_temps=self._last_hdd_temps,
+                    nvme_temps=self._last_nvme_temps,
+                    nic_temps=self._last_nic_temps,
+                    filesystems=self._last_filesystems,
                     pulls=self._last_pulls,
                     prom_status=self._status_line(
-                        freshness_status,
-                        load_status,
-                        cpu_status,
-                        hdd_status,
-                        nvme_status,
-                        nic_status,
-                        fs_status,
+                        freshness_status, load_status, cpu_status,
+                        hdd_status, nvme_status, nic_status, fs_status,
                         "checking",
                     ),
                 )
             )
+
             tfcs_status = "ok"
+            tfcs_fqdns = tuple(
+                h.tfcs_status for h in hosts.values() if h.tfcs_status
+            )
             try:
                 pull_summaries = await fetch_pull_summaries(
-                    self._config.tfcs_hosts,
-                    self._config.tfcs_port,
-                    timeout_seconds=1,
+                    tfcs_fqdns, self._config.tfcs_port, timeout_seconds=1,
                 )
                 self._last_pulls = {
-                    host: format_pull_summary(pull_summaries.get(host))
-                    for host in self._config.host_instances
+                    name: format_pull_summary(pull_summaries.get(name))
+                    for name in hosts
                 }
             except Exception:
                 tfcs_status = "unreachable"
+
             self.query_one(FleetTable).update_pulls(
-                {host: Cell.from_str(value) for host, value in self._last_pulls.items()}
+                {name: Cell.from_str(value) for name, value in self._last_pulls.items()}
             )
             self._update_source_bar(
                 self._status_line(
-                    freshness_status,
-                    load_status,
-                    cpu_status,
-                    hdd_status,
-                    nvme_status,
-                    nic_status,
-                    fs_status,
+                    freshness_status, load_status, cpu_status,
+                    hdd_status, nvme_status, nic_status, fs_status,
                     tfcs_status,
                 )
             )
@@ -227,83 +185,69 @@ class FleetDashboard(App):
         self.run_worker(refresh_from_prometheus, exclusive=True)
 
     def _unknown_freshness(self) -> dict[str, HostFreshness]:
-        """Unknown freshness for Prometheus-backed rows."""
         return {
-            host: HostFreshness(up="?", last_update="?")
-            for host in self._config.host_instances
+            name: HostFreshness(up="?", last_update="?")
+            for name in self._config.hosts
         }
 
     def _unknown_values(self) -> dict[str, str]:
-        """Unknown values for Prometheus-backed columns."""
-        return {host: "?" for host in self._config.host_instances}
+        return {name: "?" for name in self._config.hosts}
 
     def _unknown_filesystems(self) -> dict[str, dict[str, str]]:
-        """Unknown filesystem values for Prometheus-backed columns."""
-        return {
-            host: {"root": "?", "data": "?"}
-            for host in self._config.host_instances
-        }
+        return {name: {"root": "?", "data": "?"} for name in self._config.hosts}
 
     def _build_snapshot(
         self,
         freshness: dict[str, HostFreshness],
         prom_status: str,
-        loads: dict[str, str] | None = None,
-        cpu_temps: dict[str, str] | None = None,
-        hdd_temps: dict[str, str] | None = None,
-        nvme_temps: dict[str, str] | None = None,
-        nic_temps: dict[str, str] | None = None,
-        filesystems: dict[str, dict[str, str]] | None = None,
-        pulls: dict[str, str] | None = None,
+        loads: dict[str, str],
+        cpu_temps: dict[str, str],
+        hdd_temps: dict[str, str],
+        nvme_temps: dict[str, str],
+        nic_temps: dict[str, str],
+        filesystems: dict[str, dict[str, str]],
+        pulls: dict[str, str],
     ) -> FleetSnapshot:
-        fixture_by_host = {node.host: node for node in MOCK_SNAPSHOT.nodes}
-        loads = loads or {}
-        cpu_temps = cpu_temps or {}
-        hdd_temps = hdd_temps or {}
-        nvme_temps = nvme_temps or {}
-        nic_temps = nic_temps or {}
-        filesystems = filesystems or {}
-        pulls = pulls or {}
         nodes = []
-        for host in self._config.host_instances:
-            fixture = fixture_by_host.get(host, FleetNode(host=host))
-            fresh = freshness.get(host)
-            fs = filesystems.get(host, {})
-            prom_values = (
-                fresh.last_update if fresh else "?",
-                fresh.up if fresh else "?",
-                loads.get(host, "?"),
-                cpu_temps.get(host, "?"),
-                hdd_temps.get(host, "?"),
-                nvme_temps.get(host, "?"),
-                nic_temps.get(host, "?"),
-                fs.get("root", "?"),
-                fs.get("data", "?"),
+        for name in self._config.hosts:
+            fresh = freshness.get(name)
+            fs = filesystems.get(name, {})
+            cells = (
+                Cell.from_str(fresh.last_update if fresh else "?"),
+                Cell.from_str(fresh.up if fresh else "?"),
+                Cell.from_str(loads.get(name, "?")),
+                Cell.from_str(cpu_temps.get(name, "?")),
+                Cell.from_str(hdd_temps.get(name, "?")),
+                Cell.from_str(nvme_temps.get(name, "?")),
+                Cell.from_str(nic_temps.get(name, "?")),
+                Cell.from_str(fs.get("root", "?")),
+                Cell.from_str(fs.get("data", "?")),
+                Cell.from_str(pulls.get(name, "?")),
             )
-            note = fixture.note
-            if not note and all(value == "?" for value in prom_values):
+            note = ""
+            if all(cell.status == "missing" for cell in cells):
                 note = "no prom data"
+            (last_update, up, load, cpu, hdd, nvme, nic, root, data, pulls_cell) = cells
             nodes.append(
                 FleetNode(
-                    host=host,
-                    roles=fixture.roles,
-                    last_update=Cell.from_str(prom_values[0]),
-                    up=Cell.from_str(prom_values[1]),
-                    load=Cell.from_str(prom_values[2]),
-                    cpu_temp=Cell.from_str(prom_values[3]),
-                    hdd_temp=Cell.from_str(prom_values[4]),
-                    ssd_temp=fixture.ssd_temp,
-                    nvme_temp=Cell.from_str(prom_values[5]),
-                    nic=Cell.from_str(prom_values[6]),
-                    root=Cell.from_str(prom_values[7]),
-                    data=Cell.from_str(prom_values[8]),
-                    pulls=Cell.from_str(pulls.get(host, "?")),
+                    host=name,
+                    last_update=last_update,
+                    up=up,
+                    load=load,
+                    cpu_temp=cpu,
+                    hdd_temp=hdd,
+                    ssd_temp=ABSENT,
+                    nvme_temp=nvme,
+                    nic=nic,
+                    root=root,
+                    data=data,
+                    pulls=pulls_cell,
                     note=note,
                 )
             )
         return FleetSnapshot(
             nodes=tuple(nodes),
-            source=f"{MOCK_SNAPSHOT.source}; {prom_status}",
+            source=prom_status,
             refresh_seconds=self._config.refresh_seconds,
             stale_after_seconds=self._config.stale_after_seconds,
         )
@@ -329,16 +273,14 @@ class FleetDashboard(App):
     ) -> str:
         """Build a compact data source status line."""
         prom_statuses = (
-            freshness_status,
-            load_status,
-            cpu_status,
-            hdd_status,
-            nvme_status,
-            nic_status,
-            fs_status,
+            freshness_status, load_status, cpu_status,
+            hdd_status, nvme_status, nic_status, fs_status,
         )
         if all(status == "unreachable" for status in prom_statuses):
-            return f"PROMETHEUS UNREACHABLE at {self._config.prometheus_url}; tfcs={tfcs_status}"
+            return (
+                f"PROMETHEUS UNREACHABLE at {self._config.prometheus_url}; "
+                f"tfcs={tfcs_status}"
+            )
         return (
             f"freshness={freshness_status}, load={load_status}, "
             f"cpu={cpu_status}, hdd={hdd_status}, "
@@ -347,7 +289,6 @@ class FleetDashboard(App):
         )
 
     def _update_source_bar(self, source: str) -> None:
-        """Update the dashboard source/status line."""
         self.query_one("#source-bar", Static).update(
             f" source: {source}    prom: {self._config.prometheus_url}"
         )

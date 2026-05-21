@@ -1,15 +1,20 @@
 # Author: PB and Codex
-# Date: 2026-05-18
+# Date: 2026-05-21
 # License: (c) HRDAG, 2026, GPL-2 or newer
 #
 # ---
 # src/tfcs_fleet_tui/prometheus.py
 
-"""Prometheus freshness polling.
+"""Prometheus polling for the fleet dashboard.
 
 The dashboard only talks to the configured Prometheus API. Instance values
 such as ``chll.hrdag.net:9100`` are label values in scott's Prometheus, not
 network endpoints contacted by this TUI.
+
+Each fetch takes ``hosts: dict[name, Host]`` and returns ``dict[name, str]``
+(formatted display values). Sensor presence is consulted on the Host so
+that "absent" (sensor not declared) renders as ``--`` and "missing"
+(declared but no Prom sample) renders as ``?``.
 """
 
 from __future__ import annotations
@@ -18,6 +23,8 @@ import asyncio
 from dataclasses import dataclass
 
 import aiohttp
+
+from tfcs_fleet_tui.config import Host
 
 
 @dataclass(frozen=True)
@@ -31,24 +38,22 @@ class HostFreshness:
 def _instance_regex(instances: list[str]) -> str:
     """Build a Prometheus regex that matches exactly the configured labels."""
     regex_specials = {
-        ".": "[.]",
-        "+": "[+]",
-        "?": "[?]",
-        "(": "[(]",
-        ")": "[)]",
-        "[": "[[]",
-        "]": "[]]",
-        "{": "[{]",
-        "}": "[}]",
-        "^": "[^]",
-        "$": "[$]",
-        "|": "[|]",
-        "*": "[*]",
+        ".": "[.]", "+": "[+]", "?": "[?]", "(": "[(]", ")": "[)]",
+        "[": "[[]", "]": "[]]", "{": "[{]", "}": "[}]",
+        "^": "[^]", "$": "[$]", "|": "[|]", "*": "[*]",
     }
     return "|".join(
         "".join(regex_specials.get(char, char) for char in instance)
         for instance in instances
     )
+
+
+def _instance_to_host(hosts: dict[str, Host]) -> dict[str, str]:
+    return {host.instance: name for name, host in hosts.items()}
+
+
+def _hosts_regex(hosts: dict[str, Host]) -> str:
+    return _instance_regex([host.instance for host in hosts.values()])
 
 
 def _format_age(seconds: float | None) -> str:
@@ -99,18 +104,22 @@ def _sample_values_by_host(
     return values
 
 
+def _format_temp(value: float | None) -> str:
+    return "?" if value is None else f"{value:.0f}C"
+
+
 async def fetch_freshness(
     prometheus_url: str,
-    host_instances: dict[str, str],
+    hosts: dict[str, Host],
     stale_after_seconds: int,
     timeout_seconds: int = 5,
 ) -> dict[str, HostFreshness]:
     """Fetch ``Up`` and ``Last`` values for configured hosts."""
-    if not host_instances:
+    if not hosts:
         return {}
 
-    instance_to_host = {instance: host for host, instance in host_instances.items()}
-    regex = _instance_regex(list(instance_to_host))
+    instance_to_host = _instance_to_host(hosts)
+    regex = _hosts_regex(hosts)
     up_query = f'up{{instance=~"{regex}"}}'
     age_query = f'time() - timestamp(up{{instance=~"{regex}"}})'
 
@@ -124,34 +133,34 @@ async def fetch_freshness(
     age_by_host = _sample_values_by_host(age_results, instance_to_host)
 
     freshness: dict[str, HostFreshness] = {}
-    for host in host_instances:
-        age = age_by_host.get(host)
-        up_value = up_by_host.get(host)
+    for name in hosts:
+        age = age_by_host.get(name)
+        up_value = up_by_host.get(name)
         if up_value is None and age is None:
-            freshness[host] = HostFreshness(up="?", last_update="?")
+            freshness[name] = HostFreshness(up="?", last_update="?")
         elif age is not None and age > stale_after_seconds:
-            freshness[host] = HostFreshness(up="stale", last_update=_format_age(age))
+            freshness[name] = HostFreshness(up="stale", last_update=_format_age(age))
         elif up_value == 1:
-            freshness[host] = HostFreshness(up="ok", last_update=_format_age(age))
+            freshness[name] = HostFreshness(up="ok", last_update=_format_age(age))
         elif up_value == 0:
-            freshness[host] = HostFreshness(up="down", last_update=_format_age(age))
+            freshness[name] = HostFreshness(up="down", last_update=_format_age(age))
         else:
-            freshness[host] = HostFreshness(up="?", last_update=_format_age(age))
+            freshness[name] = HostFreshness(up="?", last_update=_format_age(age))
 
     return freshness
 
 
 async def fetch_load(
     prometheus_url: str,
-    host_instances: dict[str, str],
+    hosts: dict[str, Host],
     timeout_seconds: int = 5,
 ) -> dict[str, str]:
     """Fetch load1 and CPU-core counts for configured hosts."""
-    if not host_instances:
+    if not hosts:
         return {}
 
-    instance_to_host = {instance: host for host, instance in host_instances.items()}
-    regex = _instance_regex(list(instance_to_host))
+    instance_to_host = _instance_to_host(hosts)
+    regex = _hosts_regex(hosts)
     load_query = f'node_load1{{instance=~"{regex}"}}'
     cores_query = (
         'count by (instance) ('
@@ -169,31 +178,31 @@ async def fetch_load(
     cores_by_host = _sample_values_by_host(cores_results, instance_to_host)
 
     loads: dict[str, str] = {}
-    for host in host_instances:
-        load = load_by_host.get(host)
-        cores = cores_by_host.get(host)
+    for name in hosts:
+        load = load_by_host.get(name)
+        cores = cores_by_host.get(name)
         if load is None and cores is None:
-            loads[host] = "?"
+            loads[name] = "?"
         elif load is None:
-            loads[host] = f"?/{int(cores)}" if cores else "?/?"
+            loads[name] = f"?/{int(cores)}" if cores else "?/?"
         elif cores is None:
-            loads[host] = f"{load:.1f}/?"
+            loads[name] = f"{load:.1f}/?"
         else:
-            loads[host] = f"{load:.1f}/{int(cores)}"
+            loads[name] = f"{load:.1f}/{int(cores)}"
     return loads
 
 
 async def fetch_cpu_temps(
     prometheus_url: str,
-    host_instances: dict[str, str],
+    hosts: dict[str, Host],
     timeout_seconds: int = 5,
 ) -> dict[str, str]:
     """Fetch max CPU temperature per configured host."""
-    if not host_instances:
+    if not hosts:
         return {}
 
-    instance_to_host = {instance: host for host, instance in host_instances.items()}
-    regex = _instance_regex(list(instance_to_host))
+    instance_to_host = _instance_to_host(hosts)
+    regex = _hosts_regex(hosts)
     chip_regex = ".*(coretemp|k10temp).*|pci0000:00_0000:00:18_3|thermal_thermal_zone0"
     queries = (
         f'max by (instance) (node_hwmon_temp_celsius{{instance=~"{regex}",chip=~"{chip_regex}"}})',
@@ -210,24 +219,26 @@ async def fetch_cpu_temps(
     fallback_by_host = _sample_values_by_host(fallback_results, instance_to_host)
 
     temps: dict[str, str] = {}
-    for host in host_instances:
-        temp = temps_by_host.get(host, fallback_by_host.get(host))
-        temps[host] = "?" if temp is None else f"{temp:.0f}C"
+    for name, host in hosts.items():
+        if not host.has("cpu"):
+            temps[name] = "--"
+            continue
+        temp = temps_by_host.get(name, fallback_by_host.get(name))
+        temps[name] = _format_temp(temp)
     return temps
 
 
 async def fetch_hdd_temps(
     prometheus_url: str,
-    host_instances: dict[str, str],
-    no_hdd_hosts: tuple[str, ...] = (),
+    hosts: dict[str, Host],
     timeout_seconds: int = 5,
 ) -> dict[str, str]:
     """Fetch max SATA/SAS HDD temperature per configured host."""
-    if not host_instances:
+    if not hosts:
         return {}
 
-    instance_to_host = {instance: host for host, instance in host_instances.items()}
-    regex = _instance_regex(list(instance_to_host))
+    instance_to_host = _instance_to_host(hosts)
+    regex = _hosts_regex(hosts)
     query = (
         'max by (instance) ('
         f'smartctl_device_temperature{{instance=~"{regex}",device=~"sd.*",temperature_type="current"}} '
@@ -241,27 +252,25 @@ async def fetch_hdd_temps(
 
     temps_by_host = _sample_values_by_host(results, instance_to_host)
     temps: dict[str, str] = {}
-    no_hdd = set(no_hdd_hosts)
-    for host in host_instances:
-        temp = temps_by_host.get(host)
-        if host in no_hdd:
-            temps[host] = "--"
-        else:
-            temps[host] = "?" if temp is None else f"{temp:.0f}C"
+    for name, host in hosts.items():
+        if not host.has("hdd"):
+            temps[name] = "--"
+            continue
+        temps[name] = _format_temp(temps_by_host.get(name))
     return temps
 
 
 async def fetch_nvme_temps(
     prometheus_url: str,
-    host_instances: dict[str, str],
+    hosts: dict[str, Host],
     timeout_seconds: int = 5,
 ) -> dict[str, str]:
     """Fetch max NVMe temperature per configured host."""
-    if not host_instances:
+    if not hosts:
         return {}
 
-    instance_to_host = {instance: host for host, instance in host_instances.items()}
-    regex = _instance_regex(list(instance_to_host))
+    instance_to_host = _instance_to_host(hosts)
+    regex = _hosts_regex(hosts)
     query = (
         'max by (instance) ('
         f'smartctl_device_temperature{{instance=~"{regex}",device=~"nvme.*",temperature_type="current"}}'
@@ -273,24 +282,25 @@ async def fetch_nvme_temps(
 
     temps_by_host = _sample_values_by_host(results, instance_to_host)
     temps: dict[str, str] = {}
-    for host in host_instances:
-        temp = temps_by_host.get(host)
-        temps[host] = "?" if temp is None else f"{temp:.0f}C"
+    for name, host in hosts.items():
+        if not host.has("nvme"):
+            temps[name] = "--"
+            continue
+        temps[name] = _format_temp(temps_by_host.get(name))
     return temps
 
 
 async def fetch_nic_temps(
     prometheus_url: str,
-    host_instances: dict[str, str],
-    no_nic_hosts: tuple[str, ...] = (),
+    hosts: dict[str, Host],
     timeout_seconds: int = 5,
 ) -> dict[str, str]:
     """Fetch max NIC temperature per configured host."""
-    if not host_instances:
+    if not hosts:
         return {}
 
-    instance_to_host = {instance: host for host, instance in host_instances.items()}
-    regex = _instance_regex(list(instance_to_host))
+    instance_to_host = _instance_to_host(hosts)
+    regex = _hosts_regex(hosts)
     nic_chip_regex = "bnxt_en|ice|en.*|eth.*"
     query = (
         'max by (instance) ('
@@ -304,21 +314,18 @@ async def fetch_nic_temps(
         results = await _query(session, prometheus_url, query, timeout_seconds)
 
     temps_by_host = _sample_values_by_host(results, instance_to_host)
-    no_nic = set(no_nic_hosts)
     temps: dict[str, str] = {}
-    for host in host_instances:
-        if host in no_nic:
-            temps[host] = "--"
+    for name, host in hosts.items():
+        if not host.has("nic"):
+            temps[name] = "--"
             continue
-        temp = temps_by_host.get(host)
-        temps[host] = "?" if temp is None else f"{temp:.0f}C"
+        temps[name] = _format_temp(temps_by_host.get(name))
     return temps
 
 
 async def fetch_filesystems(
     prometheus_url: str,
-    host_instances: dict[str, str],
-    filesystems: dict[str, dict[str, str]],
+    hosts: dict[str, Host],
     timeout_seconds: int = 5,
 ) -> dict[str, dict[str, str]]:
     """Fetch configured root/data filesystem usage percentages.
@@ -327,11 +334,11 @@ async def fetch_filesystems(
     ``device`` label's prefix) instead of using statvfs-on-one-dataset numbers,
     which under-report because nested datasets share pool free space.
     """
-    if not host_instances:
+    if not hosts:
         return {}
 
-    instance_to_host = {instance: host for host, instance in host_instances.items()}
-    regex = _instance_regex(list(instance_to_host))
+    instance_to_host = _instance_to_host(hosts)
+    regex = _hosts_regex(hosts)
     fstype_excl = "tmpfs|devtmpfs|overlay|squashfs"
     size_query = (
         f'node_filesystem_size_bytes{{instance=~"{regex}",fstype!~"{fstype_excl}"}}'
@@ -349,61 +356,60 @@ async def fetch_filesystems(
     samples: dict[tuple[str, str], dict[str, float | str]] = {}
     for sample in size_results:
         metric = sample.get("metric", {})
-        host = instance_to_host.get(metric.get("instance"))
+        name = instance_to_host.get(metric.get("instance"))
         mp = metric.get("mountpoint")
-        device = metric.get("device", "")
-        fstype = metric.get("fstype", "")
-        if not host or not mp:
+        if not name or not mp:
             continue
         try:
             size = float(sample["value"][1])
         except (TypeError, ValueError, KeyError):
             continue
-        samples[(host, mp)] = {
-            "size": size, "device": device, "fstype": fstype
+        samples[(name, mp)] = {
+            "size": size,
+            "device": metric.get("device", ""),
+            "fstype": metric.get("fstype", ""),
         }
     for sample in avail_results:
         metric = sample.get("metric", {})
-        host = instance_to_host.get(metric.get("instance"))
+        name = instance_to_host.get(metric.get("instance"))
         mp = metric.get("mountpoint")
-        if not host or not mp:
+        if not name or not mp:
             continue
         try:
             avail = float(sample["value"][1])
         except (TypeError, ValueError, KeyError):
             continue
-        if (host, mp) in samples:
-            samples[(host, mp)]["avail"] = avail
+        if (name, mp) in samples:
+            samples[(name, mp)]["avail"] = avail
 
-    # Index zfs samples by (host, pool) where pool = device prefix before '/'.
+    # Index zfs samples by (host, pool) for pool-level aggregation.
     zfs_by_pool: dict[tuple[str, str], list[dict[str, float | str]]] = {}
-    for (host, _mp), sample in samples.items():
+    for (name, _mp), sample in samples.items():
         if sample.get("fstype") != "zfs":
             continue
         device = str(sample.get("device", ""))
         pool = device.split("/", 1)[0]
         if not pool:
             continue
-        zfs_by_pool.setdefault((host, pool), []).append(sample)
+        zfs_by_pool.setdefault((name, pool), []).append(sample)
 
     values: dict[str, dict[str, str]] = {}
-    for host in host_instances:
-        host_mounts = filesystems.get(host, {})
-        values[host] = {}
+    for name, host in hosts.items():
+        values[name] = {}
         for column in ("root", "data"):
-            mountpoint = host_mounts.get(column)
+            mountpoint = host.mounts.get(column)
             if not mountpoint:
-                values[host][column] = "?"
+                values[name][column] = "?"
                 continue
-            sample = samples.get((host, mountpoint))
+            sample = samples.get((name, mountpoint))
             if not sample or "avail" not in sample or "size" not in sample:
-                values[host][column] = "?"
+                values[name][column] = "?"
                 continue
             if sample.get("fstype") == "zfs":
                 pool = str(sample["device"]).split("/", 1)[0]
-                pool_samples = zfs_by_pool.get((host, pool), [])
+                pool_samples = zfs_by_pool.get((name, pool), [])
                 if not pool_samples:
-                    values[host][column] = "?"
+                    values[name][column] = "?"
                     continue
                 used = sum(
                     float(s["size"]) - float(s["avail"])
@@ -420,5 +426,5 @@ async def fetch_filesystems(
                 size = float(sample["size"])
                 avail = float(sample["avail"])
                 pct = 0.0 if size <= 0 else 100.0 * (1.0 - avail / size)
-            values[host][column] = f"{pct:.0f}%"
+            values[name][column] = f"{pct:.0f}%"
     return values

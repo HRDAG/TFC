@@ -1,5 +1,5 @@
 # Author: PB and Codex
-# Date: 2026-05-18
+# Date: 2026-05-21
 # License: (c) HRDAG, 2026, GPL-2 or newer
 #
 # ---
@@ -9,72 +9,26 @@
 # The TUI reads this path directly; there is no CLI config override.
 
 # TEMPORARY AIRPLANE-WIFI HACK:
-# Prometheus on scott is currently bound to 127.0.0.1, and direct tailnet
-# access to http://scott:9090 is refused. For now, run a thin SSH tunnel:
+# Prometheus on scott is currently bound to 127.0.0.1 (despite the systemd
+# override comment claiming otherwise — see hrdag-ansible#474). For now,
+# run a thin SSH tunnel:
 #
 #     ssh -L 9090:127.0.0.1:9090 scott
 #
-# Then the TUI can query the local forwarded port below. FIX THIS on a
-# non-borked network by exposing a narrow read-only Prometheus API/proxy on
-# scott over tailnet, then change this back to the tailnet endpoint.
+# Then the TUI can query the local forwarded port below. Once #474 lands,
+# point this at http://scott.hrdag.net:9090.
 prometheus_url = "http://127.0.0.1:9090"
 refresh_seconds = 10
 stale_after_seconds = 120
 thresholds_path = "config/fleet-thresholds.generated.toml"
 
-[hosts.instances]
-scott = "127.0.0.1:9100"
-chll = "chll.hrdag.net:9100"
-ipfs1 = "ipfs1.hrdag.net:9100"
-pihost = "pihost.hrdag.net:9100"
-meerkat = "meerkat.hrdag.net:9100"
-snowball = "snowball.hrdag.net:9100"
-lizo = "lizo.hrdag.net:9100"
-ben = "ben.hrdag.net:9100"
-ida = "ida.hrdag.net:9100"
-ant = "ant.hrdag.net:9100"
-nas = "nas.hrdag.net:9100"
-kj = "kj.hrdag.net:9100"
-dwight = "dwight.hrdag.net:9100"
-
-[hosts]
-no_hdd = ["ipfs1", "kj"]
-no_nic = ["chll", "ipfs1", "pihost", "meerkat", "nas", "dwight"]
-
-[hosts.filesystems]
-scott = { root = "/var", data = "/home" }
-chll = { root = "/home", data = "/storage" }
-ipfs1 = { root = "/", data = "/" }
-pihost = { root = "/", data = "/" }
-meerkat = { root = "/", data = "/" }
-snowball = { root = "/", data = "/data/tfcs" }
-lizo = { root = "/", data = "/storage" }
-ben = { root = "/", data = "/storage/orgs" }
-ida = { root = "/", data = "/storage" }
-ant = { root = "/", data = "/storage" }
-nas = { root = "/", data = "/home" }
-kj = { root = "/", data = "/vol" }
-dwight = { root = "/", data = "/storage" }
-
 [tfcs]
 # TEMPORARY DIRECT STATUS POLLING:
 # Pull source/count/rate is visible in tfcs /status, but not yet exported
-# through Prometheus. Keep this as the only non-Prometheus runtime data path
-# until ../tfcs exports "who is pulling from me" metrics that scott can scrape.
+# through Prometheus. Keep this as the only non-Prometheus runtime data
+# path until ../tfcs exports "who is pulling from me" metrics that scott
+# can scrape. Hosts with no `tfcs_status` field below are not polled.
 port = 8099
-hosts = [
-    "scott.hrdag.net",
-    "chll.hrdag.net",
-    "ipfs1.hrdag.net",
-    "pihost.hrdag.net",
-    "meerkat.hrdag.net",
-    "snowball.hrdag.net",
-    "lizo.hrdag.net",
-    "ben.hrdag.net",
-    "ida.hrdag.net",
-    "ant.hrdag.net",
-    "dwight.hrdag.net",
-]
 
 [display]
 sort = "fixed"
@@ -82,17 +36,82 @@ temperature_unit = "celsius"
 
 [columns]
 enabled = [
-    "host",
-    "last",
-    "up",
-    "load",
-    "cpu_temp",
-    "hdd_temp",
-    "ssd_temp",
-    "nvme_temp",
-    "nic",
-    "root",
-    "data",
-    "tfcs_pulls",
-    "note",
+    "host", "last", "up", "load",
+    "cpu_temp", "hdd_temp", "ssd_temp", "nvme_temp", "nic",
+    "root", "data", "tfcs_pulls", "note",
 ]
+
+# One block per host. `sensors` defaults to all true; declare false to mark a
+# physical absence (no spinning HDD, no NIC hwmon chip, etc.) so cells render
+# as `--` rather than `?`. `tfcs_status` is the FQDN to poll on tfcs.port for
+# pull activity; omit if the host doesn't run tfcs.
+
+[hosts.scott]
+instance = "127.0.0.1:9100"
+tfcs_status = "scott.hrdag.net"
+mounts = { root = "/var", data = "/home" }
+
+[hosts.chll]
+instance = "chll.hrdag.net:9100"
+tfcs_status = "chll.hrdag.net"
+mounts = { root = "/home", data = "/storage" }
+sensors = { nic = false }
+
+[hosts.ipfs1]
+instance = "ipfs1.hrdag.net:9100"
+tfcs_status = "ipfs1.hrdag.net"
+mounts = { root = "/", data = "/" }
+sensors = { hdd = false, nic = false }
+
+[hosts.pihost]
+instance = "pihost.hrdag.net:9100"
+tfcs_status = "pihost.hrdag.net"
+mounts = { root = "/", data = "/" }
+sensors = { nic = false }
+
+[hosts.meerkat]
+instance = "meerkat.hrdag.net:9100"
+tfcs_status = "meerkat.hrdag.net"
+mounts = { root = "/", data = "/" }
+sensors = { nic = false }
+
+[hosts.snowball]
+instance = "snowball.hrdag.net:9100"
+tfcs_status = "snowball.hrdag.net"
+mounts = { root = "/", data = "/data/tfcs" }
+
+[hosts.lizo]
+instance = "lizo.hrdag.net:9100"
+tfcs_status = "lizo.hrdag.net"
+mounts = { root = "/", data = "/storage" }
+
+[hosts.ben]
+instance = "ben.hrdag.net:9100"
+tfcs_status = "ben.hrdag.net"
+mounts = { root = "/", data = "/storage/orgs" }
+
+[hosts.ida]
+instance = "ida.hrdag.net:9100"
+tfcs_status = "ida.hrdag.net"
+mounts = { root = "/", data = "/storage" }
+
+[hosts.ant]
+instance = "ant.hrdag.net:9100"
+tfcs_status = "ant.hrdag.net"
+mounts = { root = "/", data = "/storage" }
+
+[hosts.nas]
+instance = "nas.hrdag.net:9100"
+mounts = { root = "/", data = "/home" }
+sensors = { nic = false }
+
+[hosts.kj]
+instance = "kj.hrdag.net:9100"
+mounts = { root = "/", data = "/vol" }
+sensors = { hdd = false }
+
+[hosts.dwight]
+instance = "dwight.hrdag.net:9100"
+tfcs_status = "dwight.hrdag.net"
+mounts = { root = "/", data = "/storage" }
+sensors = { nic = false }

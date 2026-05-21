@@ -9,7 +9,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Literal
 
 
@@ -52,7 +52,6 @@ class FleetNode:
     """One row in the fleet dashboard."""
 
     host: str
-    roles: tuple[str, ...] = field(default_factory=tuple)
     last_update: Cell = MISSING
     up: Cell = ABSENT
     load: Cell = ABSENT
