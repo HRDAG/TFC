@@ -114,13 +114,23 @@ def _pct_cell(value: float) -> Cell:
 
 
 def _classify(cell: Cell, t: Thresholds | None) -> Cell:
-    """Upgrade an ok cell to warn/crit when raw crosses a threshold."""
+    """Classify a verified ok cell against a threshold.
+
+    Returns "crit" / "warn" if the raw value crosses the matching boundary,
+    "safe" when at least one threshold exists and the value is below all
+    available boundaries (= explicitly verified within tolerance), and
+    leaves the cell untouched when no threshold information exists. The
+    "ok" → "safe" promotion is what gives the dashboard a green cell only
+    where a real comparison happened.
+    """
     if t is None or cell.status != "ok" or cell.raw is None:
         return cell
     if t.crit is not None and cell.raw >= t.crit:
         return Cell(value=cell.value, status="crit", raw=cell.raw)
     if t.warn is not None and cell.raw >= t.warn:
         return Cell(value=cell.value, status="warn", raw=cell.raw)
+    if t.warn is not None or t.crit is not None:
+        return Cell(value=cell.value, status="safe", raw=cell.raw)
     return cell
 
 
@@ -155,8 +165,12 @@ async def fetch_freshness(
         if up_value is None and age is None:
             freshness[name] = HostFreshness(up=Cell.missing(), last_update=Cell.missing())
             continue
-        last = (
-            Cell.of(age, _format_age(age)) if age is not None else Cell.missing()
+        # last_update is "safe" when we have a recent age — the stale check
+        # below is the threshold for this metric. up=1 is also a verified
+        # pass, so it earns "safe" too.
+        fresh_last = (
+            Cell.of(age, _format_age(age), status="safe")
+            if age is not None else Cell.missing()
         )
         if age is not None and age > stale_after_seconds:
             freshness[name] = HostFreshness(
@@ -164,14 +178,17 @@ async def fetch_freshness(
                 last_update=Cell.of(age, _format_age(age), status="warn"),
             )
         elif up_value == 1:
-            freshness[name] = HostFreshness(up=Cell.of(1, "ok"), last_update=last)
+            freshness[name] = HostFreshness(
+                up=Cell.of(1, "ok", status="safe"),
+                last_update=fresh_last,
+            )
         elif up_value == 0:
             freshness[name] = HostFreshness(
                 up=Cell.of(0, "down", status="crit"),
-                last_update=last,
+                last_update=fresh_last,
             )
         else:
-            freshness[name] = HostFreshness(up=Cell.missing(), last_update=last)
+            freshness[name] = HostFreshness(up=Cell.missing(), last_update=fresh_last)
 
     return freshness
 

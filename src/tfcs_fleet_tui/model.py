@@ -16,7 +16,7 @@ from typing import Literal
 ABSENT_STR = "--"
 MISSING_STR = "?"
 
-CellStatus = Literal["ok", "warn", "crit", "missing", "absent"]
+CellStatus = Literal["ok", "safe", "warn", "crit", "missing", "absent"]
 
 
 @dataclass(frozen=True)

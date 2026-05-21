@@ -16,6 +16,7 @@ from tfcs_fleet_tui.model import Cell, FleetSnapshot
 
 
 _STATUS_STYLE: dict[str, str] = {
+    "safe": "green",
     "warn": "yellow",
     "crit": "bold red",
     "missing": "dim",
