@@ -175,3 +175,33 @@ uv run tfcs-tui -c config/tfcs-tui.toml
 
 The dashboard shows replication progress, node health, per-org breakdown,
 traffic heatmaps, and heartbeat freshness across all cluster nodes.
+
+---
+
+## Fleet Health Dashboard
+
+A second TUI focused on host-level health rather than pipeline traffic:
+one row per machine, one column per signal (last-scrape, up, load, CPU /
+HDD / SSD / NVMe / NIC temperatures, root and data filesystem fullness,
+and the count of active tfcs pulls).
+
+```bash
+uv run tfcs-fleet-tui
+```
+
+It pulls metrics from Prometheus on `scott` and queries each tfcs node's
+`/status` endpoint directly. Hosts that genuinely don't expose a given
+sensor (no spinning HDDs, no NIC hwmon chip) render `--`; cells render
+`?` only when the metric is expected but missing. For ZFS hosts, the
+data column reports pool fullness aggregated across all datasets sharing
+the pool, since per-dataset `node_filesystem_*` samples under-report
+(every dataset reports the same `avail` and a near-zero used).
+
+Configured in `config/tfcs-fleet-tui.toml`. Until Prometheus on scott is
+bound to its tailnet IP (tracked in
+[hrdag-ansible#474](https://github.com/HRDAG/hrdag-ansible/issues/474)),
+this TUI needs an SSH tunnel:
+
+```bash
+ssh -L 9090:127.0.0.1:9090 scott
+```
