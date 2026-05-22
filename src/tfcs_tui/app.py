@@ -115,9 +115,20 @@ class TfcsDashboard(App):
         target_copies: int = 3,
         refresh_seconds: int = 10,
         ntx_hosts: list[str] | None = None,
+        backoff_failures: int = 3,
+        evict_failures: int = 10,
     ) -> None:
         super().__init__()
-        self._peer_hosts = peer_hosts
+        # Bootstrap hosts come from config and are never evicted. Discovered
+        # hosts are added via /nodes responses and may be backed off / evicted
+        # when they stop responding. _peer_hosts is the live union (property).
+        self._bootstrap_hosts: list[str] = list(peer_hosts)  # preserve config order
+        self._discovered_hosts: set[str] = set()
+        self._evicted_hosts: set[str] = set()
+        self._host_failures: dict[str, int] = {}
+        self._backoff_failures = backoff_failures
+        self._evict_failures = evict_failures
+
         self._http_port = http_port
         self._ntx_port = ntx_port
         self._target_copies = target_copies
@@ -131,6 +142,56 @@ class TfcsDashboard(App):
 
         self._ip_map = load_tailscale_ip_map(self._peer_hosts)
         self._velocity_history = load_velocity_history()
+
+    @property
+    def _peer_hosts(self) -> list[str]:
+        """Live peer list: bootstrap (config order) + discovered (sorted, minus evicted)."""
+        bootstrap_set = set(self._bootstrap_hosts)
+        extras = sorted(self._discovered_hosts - bootstrap_set - self._evicted_hosts)
+        return self._bootstrap_hosts + extras
+
+    def _is_bootstrap(self, host: str) -> bool:
+        return host in self._bootstrap_hosts
+
+    def _record_poll_result(self, host: str, ok: bool) -> bool:
+        """Track success/failure for a host. Returns True if peer set changed (eviction)."""
+        if ok:
+            self._host_failures[host] = 0
+            return False
+        self._host_failures[host] = self._host_failures.get(host, 0) + 1
+        if (
+            not self._is_bootstrap(host)
+            and self._host_failures[host] >= self._evict_failures
+            and host not in self._evicted_hosts
+        ):
+            self._evicted_hosts.add(host)
+            self._discovered_hosts.discard(host)
+            return True
+        return False
+
+    def _should_skip_poll(self, host: str) -> bool:
+        """Discovered hosts in backoff are skipped; bootstrap hosts are always polled."""
+        if self._is_bootstrap(host):
+            return False
+        return self._host_failures.get(host, 0) >= self._backoff_failures
+
+    def _merge_discovered_peers(self, nodes_list: list[dict]) -> bool:
+        """Merge node_ids from /nodes into discovered_hosts. Returns True on change."""
+        if not nodes_list:
+            return False
+        bootstrap_set = set(self._bootstrap_hosts)
+        new_hosts: set[str] = set()
+        for n in nodes_list:
+            nid = n.get("node_id")
+            if not nid or nid in bootstrap_set or nid in self._evicted_hosts:
+                continue
+            if nid not in self._discovered_hosts:
+                new_hosts.add(nid)
+        if not new_hosts:
+            return False
+        self._discovered_hosts.update(new_hosts)
+        self._ip_map = load_tailscale_ip_map(self._peer_hosts)
+        return True
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -178,6 +239,12 @@ class TfcsDashboard(App):
             statuses, node_status, heartbeat_age, replication, velocity, site_dist, sole_holders, by_org = await poll_cluster(
                 self._peer_hosts, self._http_port, self._target_copies
             )
+
+            # Promote any /nodes-known FQDNs we don't already have to discovered.
+            self._merge_discovered_peers(
+                [{"node_id": nid} for nid in node_status]
+            )
+
             traffic_reports = await poll_traffic_matrix(
                 self._peer_hosts, self._http_port
             )
@@ -248,13 +315,28 @@ class TfcsDashboard(App):
         self.run_worker(do_ntx_poll, exclusive=False)
 
     def _poll_next_node(self) -> None:
-        """Poll next node in rolling sequence (1 node per second)."""
-        if not self._peer_hosts:
+        """Poll next node in rolling sequence (1 node per second).
+
+        Skips hosts in backoff (>= backoff_failures consecutive failures).
+        Bootstrap hosts are never skipped.
+        """
+        peers = self._peer_hosts  # snapshot for this tick (property)
+        if not peers:
             return
 
-        host = self._peer_hosts[self._current_node_index]
-        include_global = (self._current_node_index == 0)  # Fetch global data on first node
-        self._current_node_index = (self._current_node_index + 1) % len(self._peer_hosts)
+        # Walk forward up to len(peers) slots looking for one that isn't in backoff.
+        n = len(peers)
+        host: str | None = None
+        for _ in range(n):
+            candidate = peers[self._current_node_index % n]
+            self._current_node_index = (self._current_node_index + 1) % n
+            if not self._should_skip_poll(candidate):
+                host = candidate
+                break
+        if host is None:
+            return  # every host in backoff — nothing to poll this tick
+
+        include_global = host == peers[0]  # global fetch piggybacks on bootstrap[0]
 
         async def do_poll():
             await self._do_poll(host, include_global)
@@ -270,6 +352,9 @@ class TfcsDashboard(App):
                 session, host, self._http_port, include_global, self._target_copies
             )
 
+            ok = status is not None or traffic is not None
+            self._record_poll_result(host, ok)
+
             # Extract node_id from status or traffic
             node_id = None
             if status:
@@ -284,6 +369,9 @@ class TfcsDashboard(App):
             self._store.update_node(node_id, status, traffic)
 
             if include_global and nodes_list is not None and replication is not None:
+                # Promote /nodes-known FQDNs to discovered before anything reads _peer_hosts
+                self._merge_discovered_peers(nodes_list)
+
                 # Parse nodes_list into node_status and heartbeat_age dicts
                 node_status = {}
                 heartbeat_age = {}
@@ -291,7 +379,7 @@ class TfcsDashboard(App):
                     nid = node_info.get("node_id")
                     if nid:
                         node_status[nid] = node_info.get("status", "unknown")
-                        heartbeat_age[nid] = node_info.get("heartbeat_age_seconds", 0.0)
+                        heartbeat_age[nid] = node_info.get("heartbeat_age_seconds") or 0.0
 
                 # Fetch heartbeat matrix from all peers
                 from tfcs_tui.data import fetch_heartbeat_matrix
@@ -483,6 +571,8 @@ def main() -> None:
         target_copies=cfg["target_copies"],
         refresh_seconds=cfg["refresh_seconds"],
         ntx_hosts=cfg["ntx_hosts"],
+        backoff_failures=cfg["backoff_failures"],
+        evict_failures=cfg["evict_failures"],
     )
 
     app.run()

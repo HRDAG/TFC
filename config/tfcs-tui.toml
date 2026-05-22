@@ -27,6 +27,13 @@ ntx_port = 9401
 target_copies = 4
 refresh_seconds = 10
 
+# Peer auto-discovery: hosts seen in /nodes responses but not in bootstrap_peers
+# are added as "discovered". Discovered hosts that fail to respond for
+# backoff_failures consecutive polls are paused; at evict_failures they are
+# removed from the live list. Bootstrap peers are always polled and never evicted.
+backoff_failures = 3
+evict_failures = 10
+
 ntx_hosts = [
     "scott.hrdag.net",
     "lizo.hrdag.net",

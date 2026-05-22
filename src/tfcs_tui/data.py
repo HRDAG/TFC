@@ -162,7 +162,7 @@ async def poll_cluster(
             nodes = await fetch_nodes(session, host, http_port)
             if nodes is not None:
                 node_status = {n["node_id"]: n["status"] for n in nodes}
-                heartbeat_age = {n["node_id"]: n.get("heartbeat_age_seconds", 0.0) for n in nodes}
+                heartbeat_age = {n["node_id"]: n.get("heartbeat_age_seconds") or 0.0 for n in nodes}
                 break
 
         # Fetch /replication from first responding peer
@@ -224,6 +224,8 @@ def load_config(config_path: Path) -> dict:
         "target_copies": raw.get("target_copies", 3),
         "refresh_seconds": raw.get("refresh_seconds", 10),
         "ntx_hosts": raw.get("ntx_hosts"),
+        "backoff_failures": raw.get("backoff_failures", 3),
+        "evict_failures": raw.get("evict_failures", 10),
     }
 
 
@@ -346,14 +348,18 @@ async def fetch_node_all(
 # ---------------------------------------------------------------------------
 
 def load_tailscale_ip_map(peer_hosts: list[str] | None = None) -> dict[str, str]:
-    """Parse tailscale status to map IPs to hostnames.
+    """Parse tailscale status to map IPs to FQDNs.
 
     Args:
-        peer_hosts: Optional list of FQDNs to map short names to
+        peer_hosts: List of known FQDNs. Used both to map short->FQDN for those
+                    hosts and to derive a default suffix (e.g. ".hrdag.net") for
+                    synthesizing FQDNs for tailnet peers we don't yet have in
+                    the known list.
 
     Returns: {"100.64.0.4": "chll.hrdag.net", ...}
     """
     import subprocess
+    from collections import Counter
 
     try:
         result = subprocess.run(
@@ -366,12 +372,18 @@ def load_tailscale_ip_map(peer_hosts: list[str] | None = None) -> dict[str, str]
     except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
         return {}
 
-    # Build short name -> FQDN map from peer_hosts
-    short_to_fqdn = {}
+    # Build short -> FQDN map from peer_hosts, and pick the dominant suffix
+    # so that newly-discovered short names from tailscale can be promoted to
+    # FQDNs that match the rest of the cluster (e.g. "dwight" -> "dwight.hrdag.net").
+    short_to_fqdn: dict[str, str] = {}
+    suffix_counts: Counter[str] = Counter()
     if peer_hosts:
         for fqdn in peer_hosts:
             short_name = short(fqdn)
             short_to_fqdn[short_name] = fqdn
+            if "." in fqdn:
+                suffix_counts[fqdn.split(".", 1)[1]] += 1
+    default_suffix = suffix_counts.most_common(1)[0][0] if suffix_counts else None
 
     ip_map = {}
     for line in result.stdout.split('\n'):
@@ -382,8 +394,12 @@ def load_tailscale_ip_map(peer_hosts: list[str] | None = None) -> dict[str, str]
             ip = parts[0]
             short_name = parts[1]
             if ip.startswith('100.'):  # Tailscale IP
-                # Map short name to FQDN if available, otherwise use short name
-                hostname = short_to_fqdn.get(short_name, short_name)
+                if short_name in short_to_fqdn:
+                    hostname = short_to_fqdn[short_name]
+                elif default_suffix:
+                    hostname = f"{short_name}.{default_suffix}"
+                else:
+                    hostname = short_name
                 ip_map[ip] = hostname
 
     return ip_map
@@ -566,7 +582,7 @@ async def fetch_heartbeat_matrix(
 
             for node_info in result:
                 observed = node_info.get("node_id")
-                hb_age = node_info.get("heartbeat_age_seconds", 0.0)
+                hb_age = node_info.get("heartbeat_age_seconds") or 0.0
                 if observed:
                     matrix[observer][observed] = hb_age
 
