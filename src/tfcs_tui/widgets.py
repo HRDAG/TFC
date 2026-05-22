@@ -431,16 +431,44 @@ class NodesTable(DataTable):
                 cluster_max_version = us.get("cluster_max_version")
                 break
 
-        # Sort with scott first, then alphabetical
-        def sort_key(s):
-            nid = s["node_id"]
-            return (0 if nid.startswith("scott.") else 1, nid)
+        # Build union of all node_ids: those we polled /status from, plus
+        # those known only via /nodes (discovered but unreachable by us yet).
+        status_by_nid: dict[str, dict] = {s["node_id"]: s for s in statuses}
+        all_nids = sorted(
+            set(status_by_nid) | set(node_status),
+            key=lambda nid: (0 if nid.startswith("scott.") else 1, nid),
+        )
 
-        for s in sorted(statuses, key=sort_key):
-            nid = s["node_id"]
+        for nid in all_nids:
+            s = status_by_nid.get(nid)
             status = node_status.get(nid, "unknown")
             hb_age = heartbeat_age.get(nid, 0.0)
             hb_str = f"{hb_age:.0f}s" if hb_age > 0 else "--"
+
+            status_style = (
+                "green" if status == "alive"
+                else "yellow" if status == "suspect"
+                else "red"
+            )
+
+            if s is None:
+                # Known only via /nodes — minimal row, fields we don't have go to --
+                self.add_row(
+                    Text(short(nid), style="dim"),
+                    Text("?", style="dim"),
+                    Text("?", style="dim"),
+                    Text(status, style=status_style),
+                    Text(hb_str, justify="right"),
+                    Text("--", style="dim"),
+                    Text("?", style="dim"),
+                    Text("--", style="dim", justify="right"),
+                    Text("--", style="dim", justify="right"),
+                    Text("--", style="dim", justify="right"),
+                    Text("--", style="dim", justify="right"),
+                    Text("--", style="dim", justify="right"),
+                )
+                continue
+
             free_gb = s.get("free_gb", 0)
             free_str = humanize.naturalsize(free_gb * 1_000_000_000, binary=False, format="%.0f")
             pulls = len(s.get("claims", []))
@@ -448,11 +476,6 @@ class NodesTable(DataTable):
             uptime = fmt_uptime(s.get("uptime_seconds", 0))
             peers = str(s.get("alive_peers", 0))
 
-            status_style = (
-                "green" if status == "alive"
-                else "yellow" if status == "suspect"
-                else "red"
-            )
             free_style = "red bold" if free_gb < 50 else ""
             sole_count = s.get("sole_holder_count", 0)
             node_cell = Text(short(nid), style="red bold" if sole_count > 0 else "")
@@ -755,6 +778,10 @@ class BaseHeatmap(Static):
         others = sorted([n for n in nodes if not n.startswith("scott.")])
         return scott + others
 
+    def set_node_names(self, node_names: list[str]) -> None:
+        """Update axis labels. Heatmap re-renders on next refresh_data."""
+        self.node_names = self._sort_nodes(node_names)
+
     def _build_matrix(self, data: object) -> dict[tuple[str, str], float]:
         """Build metric matrix from data. Subclass implements."""
         raise NotImplementedError
@@ -863,9 +890,13 @@ class TrafficHeatmap(BaseHeatmap):
             ip_map: {ip: hostname} mapping from tailscale status
         """
         super().__init__(node_names)
-        self.ip_to_node = {ip: host for ip, host in ip_map.items()}
+        self.ip_to_node = dict(ip_map)
         self._gradient = self._make_gradient()
         self._max_rate = 80_000_000.0  # Fixed scale: 80 MB/s
+
+    def set_ip_map(self, ip_map: dict[str, str]) -> None:
+        """Update IP-to-FQDN mapping (after peer auto-discovery)."""
+        self.ip_to_node = dict(ip_map)
 
     def _get_row_label_width(self) -> int:
         """Traffic heatmap uses wider labels."""
@@ -995,7 +1026,11 @@ class LatencyHeatmap(BaseHeatmap):
 
     def __init__(self, node_names: list[str], ip_map: dict[str, str]) -> None:
         super().__init__(node_names)
-        self.ip_to_node = {ip: host for ip, host in ip_map.items()}
+        self.ip_to_node = dict(ip_map)
+
+    def set_ip_map(self, ip_map: dict[str, str]) -> None:
+        """Update IP-to-FQDN mapping (after peer auto-discovery)."""
+        self.ip_to_node = dict(ip_map)
 
     def _get_row_label_width(self) -> int:
         """Match TrafficHeatmap spacing."""
@@ -1251,19 +1286,37 @@ class OrgNodeTable(DataTable):
 
     def __init__(self, peer_hosts: list[str]) -> None:
         super().__init__()
+        self._peer_nodes = self._sort_peers(peer_hosts)
+
+    @staticmethod
+    def _sort_peers(peer_hosts: list[str]) -> list[str]:
         scott = [h for h in peer_hosts if h.startswith("scott.")]
         others = sorted([h for h in peer_hosts if not h.startswith("scott.")])
-        self._peer_nodes = scott + others
+        return scott + others
 
     def on_mount(self) -> None:
-        self.add_column("Org", width=11, key="org")
-        for node in self._peer_nodes:
-            name = short(node)[:6]
-            self.add_column(name, width=7, key=f"n_{short(node)}")
+        self._rebuild_columns(self._peer_nodes)
         self.cursor_type = "none"
 
-    def refresh_data(self, by_org: dict) -> None:
-        self.clear()
+    def _rebuild_columns(self, peer_nodes: list[str]) -> None:
+        """Replace all columns to match peer_nodes. Called on init and on peer-set change."""
+        self.clear(columns=True)
+        self.add_column("Org", width=11, key="org")
+        for node in peer_nodes:
+            name = short(node)[:6]
+            self.add_column(name, width=7, key=f"n_{short(node)}")
+        self._peer_nodes = peer_nodes
+
+    def refresh_data(self, by_org: dict, peer_hosts: list[str] | None = None) -> None:
+        if peer_hosts is not None:
+            new_nodes = self._sort_peers(peer_hosts)
+            if new_nodes != self._peer_nodes:
+                self._rebuild_columns(new_nodes)
+            else:
+                self.clear()
+        else:
+            self.clear()
+
         if not by_org:
             return
 

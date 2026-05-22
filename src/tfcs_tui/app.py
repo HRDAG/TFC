@@ -450,13 +450,23 @@ class TfcsDashboard(App):
         self.query_one(TransfersTable).refresh_data(store.statuses)
 
         # --- Orgs tab (Tab 3) ---
+        peers = self._peer_hosts  # snapshot (property)
         self.query_one(OrgsTable).refresh_data(store.by_org)
-        self.query_one(OrgNodeTable).refresh_data(store.by_org)
+        self.query_one(OrgNodeTable).refresh_data(store.by_org, peers)
 
         # --- Heatmap tabs (Tabs 4-6) ---
-        self.query_one(TrafficHeatmap).refresh_data(store.traffic_reports, message.updated_node)
-        self.query_one(LatencyHeatmap).refresh_data(store.traffic_reports, message.updated_node)
-        self.query_one(HeartbeatMatrix).refresh_data(store.heartbeat_matrix, message.updated_node)
+        # Push current peer list + ip_map so heatmap axes include discovered nodes.
+        traffic_hm = self.query_one(TrafficHeatmap)
+        latency_hm = self.query_one(LatencyHeatmap)
+        heartbeat_hm = self.query_one(HeartbeatMatrix)
+        traffic_hm.set_node_names(peers)
+        traffic_hm.set_ip_map(self._ip_map)
+        latency_hm.set_node_names(peers)
+        latency_hm.set_ip_map(self._ip_map)
+        heartbeat_hm.set_node_names(peers)
+        traffic_hm.refresh_data(store.traffic_reports, message.updated_node)
+        latency_hm.refresh_data(store.traffic_reports, message.updated_node)
+        heartbeat_hm.refresh_data(store.heartbeat_matrix, message.updated_node)
 
         # --- Ingest tab (Tab 7) ---
         ntx = store.ntx_statuses
