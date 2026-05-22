@@ -34,11 +34,6 @@ refresh_seconds = 10
 backoff_failures = 3
 evict_failures = 10
 
-ntx_hosts = [
-    "scott.hrdag.net",
-    "lizo.hrdag.net",
-    "chll.hrdag.net",
-    "ida.hrdag.net",
-    "ant.hrdag.net",
-    "dwight.hrdag.net",
-]
+# ntx_hosts is derived automatically from /status responses where node_class
+# is 'active' or 'anchor'. Override here only if you need to pin a specific
+# host list (e.g. for testing a subset of the cluster).

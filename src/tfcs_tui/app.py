@@ -281,18 +281,21 @@ class TfcsDashboard(App):
 
         self.run_worker(do_full_refresh, exclusive=False)
 
+    _INGEST_CLASSES = frozenset({"active", "anchor"})
+
     def _get_ntx_hosts(self) -> list[str]:
         """Return FQDNs of ntx ingest nodes.
 
-        Uses ntx_hosts from config if present, otherwise falls back
-        to nodes with node_class == 'active'.
+        Uses ntx_hosts from config if present (backwards compat). Otherwise
+        derives from polled /status responses by node_class -- both 'active'
+        and 'anchor' nodes run the ntx pipeline (see TFC README node classes).
         """
         if self._ntx_hosts_config:
             return list(self._ntx_hosts_config)
         return [
             s["node_id"]
             for s in self._store.statuses
-            if s.get("node_class") == "active"
+            if s.get("node_class") in self._INGEST_CLASSES
         ]
 
     def _poll_next_ntx_node(self) -> None:
