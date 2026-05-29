@@ -1,0 +1,219 @@
+#!/usr/bin/env python3
+# Author: PB and Claude
+# Date: 2026-05-29
+# License: (c) HRDAG, 2026, GPL-2 or newer
+#
+# ---
+# scripts/tfcs-monitor
+#
+# Periodic snapshot of cluster replication progress for ant + ida (the
+# two anchors carrying sole-copy corpora). One JSONL line per run; the
+# series is read by progress-windows.py for windowed convergence analysis.
+#
+# Plain python3 (stdlib only) on purpose: this runs unattended as the tfcs
+# user from a systemd timer, so it avoids any uv/venv resolution at run time.
+#
+# Captured per snapshot:
+#   - per-anchor (ida, ant): /status copies_count + sole_holder_count
+#   - per-puller × per-source: /rsync-stats total_succeeded, total_bytes,
+#     agg_mbps (cluster-wide rate of pulls FROM ida and FROM ant)
+#   - per-org holder distribution from scott's local DB:
+#       holders=1 (sole), 2, 3, 4, 5+ for org=ii and org=km0
+#
+# Best-effort: exits non-zero only on hard failures, otherwise degrades
+# gracefully when individual peers are unreachable.
+#
+# Install + schedule: see the repo Makefile (`make install`) and
+# deploy/tfcs-monitor.{service,timer}. Runs as tfcs every 30 min, forever.
+#
+# Usage (manual / debugging):
+#   /usr/local/bin/tfcs-monitor
+#   /usr/local/bin/tfcs-monitor --log /tmp/test.jsonl --print
+
+import argparse
+import json
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+# Anchors we're tracking (the corpora-holders this tool was built to watch).
+ANCHORS = ["ida.hrdag.net", "ant.hrdag.net"]
+
+# Pullers — every active node EXCEPT the anchor itself contributes pulls.
+# Self-pull doesn't exist; we filter the anchor out per-source below.
+ALL_NODES = [
+    "scott.hrdag.net", "ben.hrdag.net", "chll.hrdag.net",
+    "ida.hrdag.net", "ant.hrdag.net", "ipfs1.hrdag.net",
+    "lizo.hrdag.net", "meerkat.hrdag.net", "pihost.hrdag.net",
+    "snowball.hrdag.net",
+]
+
+# Org → anchor (used to label the holder distribution per org).
+ORGS = {"ii": "ida.hrdag.net", "km0": "ant.hrdag.net"}
+
+# scott-local DB used for ground-truth org holder distribution.
+SCOTT_DB = "/storage/tfcs/state/scott.hrdag.net.db"
+
+HTTP_TIMEOUT = 5
+# Data, not a log: lives under /var/lib in a dir dedicated to this tool
+# (NOT /var/lib/tfcs, which is the tfcs user's home). World-readable file.
+DEFAULT_LOG = "/var/lib/tfcs-monitor/replication-progress.jsonl"
+
+
+def http_get_json(host: str, path: str) -> dict | None:
+    url = f"http://{host}:8099{path}"
+    try:
+        with urllib.request.urlopen(url, timeout=HTTP_TIMEOUT) as r:
+            return json.loads(r.read().decode())
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError, json.JSONDecodeError):
+        return None
+
+
+def fetch_anchor_status(host: str) -> dict:
+    s = http_get_json(host, "/status") or {}
+    return {
+        "reachable": bool(s),
+        "version": s.get("version"),
+        "copies_count": s.get("copies_count"),
+        "sole_holder_count": s.get("sole_holder_count"),
+        "active_claims": s.get("active_claims"),
+        "uptime_seconds": s.get("uptime_seconds"),
+    }
+
+
+def fetch_puller_stats(puller: str) -> dict | None:
+    """Per-source pull stats from one puller's /rsync-stats."""
+    s = http_get_json(puller, "/rsync-stats")
+    if not s:
+        return None
+    sources = s.get("sources", {})
+    out = {}
+    for anchor in ANCHORS:
+        if anchor == puller:
+            continue
+        src = sources.get(anchor, {})
+        out[anchor] = {
+            "total_succeeded": src.get("total_succeeded", 0),
+            "total_bytes_pulled": src.get("total_bytes_pulled", 0),
+            "agg_mbps": src.get("agg_mbps", 0.0),
+            "total_attempts": src.get("total_attempts", 0),
+            "total_failed": src.get("total_failed", 0),
+        }
+    return out
+
+
+def fetch_org_distribution(db_path: str) -> dict:
+    """For each org we track, count commits by holder-count bucket.
+
+    Uses scott's local DB as the cluster-wide ground truth (after
+    metadata convergence, all nodes agree on holder counts).
+    """
+    out: dict = {}
+    for org in ORGS:
+        try:
+            cp = subprocess.run(
+                ["sqlite3", db_path,
+                 f"SELECT n_holders, COUNT(*) FROM "
+                 f"(SELECT commit_id, COUNT(DISTINCT node) AS n_holders "
+                 f"FROM copies WHERE org='{org}' AND size > 0 "
+                 f"GROUP BY commit_id) GROUP BY n_holders ORDER BY 1"],
+                capture_output=True, text=True, timeout=30, check=True,
+            )
+            buckets: dict = {}
+            for line in cp.stdout.strip().split("\n"):
+                if not line:
+                    continue
+                n_str, c_str = line.split("|", 1)
+                n = int(n_str)
+                # Cap labels at 5+ to keep snapshot stable as the target shifts.
+                key = str(n) if n < 5 else "5+"
+                buckets[key] = buckets.get(key, 0) + int(c_str)
+            # Total ii/km0 commits across cluster
+            cp2 = subprocess.run(
+                ["sqlite3", db_path,
+                 f"SELECT COUNT(DISTINCT commit_id) FROM copies "
+                 f"WHERE org='{org}' AND size > 0"],
+                capture_output=True, text=True, timeout=10, check=True,
+            )
+            total = int(cp2.stdout.strip() or "0")
+            # Per-node holdings
+            cp3 = subprocess.run(
+                ["sqlite3", db_path,
+                 f"SELECT node, COUNT(*) FROM copies WHERE org='{org}' "
+                 f"AND size > 0 GROUP BY node ORDER BY 2 DESC"],
+                capture_output=True, text=True, timeout=10, check=True,
+            )
+            by_node = {}
+            for line in cp3.stdout.strip().split("\n"):
+                if not line:
+                    continue
+                n, c = line.split("|", 1)
+                by_node[n] = int(c)
+            out[org] = {
+                "total_commits": total,
+                "holders_distribution": buckets,
+                "by_node": by_node,
+            }
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+            out[org] = {"error": str(e)}
+    return out
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--log", default=DEFAULT_LOG, help=f"output JSONL path (default: {DEFAULT_LOG})")
+    ap.add_argument("--db", default=SCOTT_DB, help=f"scott copies DB path (default: {SCOTT_DB})")
+    ap.add_argument("--print", action="store_true", help="also print snapshot to stdout")
+    args = ap.parse_args()
+
+    snapshot: dict = {
+        "ts": int(time.time()),
+        "ts_iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "anchors": {},
+        "pullers": {},
+        "orgs": fetch_org_distribution(args.db),
+    }
+
+    for anchor in ANCHORS:
+        snapshot["anchors"][anchor] = fetch_anchor_status(anchor)
+
+    for puller in ALL_NODES:
+        if puller in ANCHORS:
+            # Anchors don't pull from themselves, but they DO pull from the
+            # other anchor — capture that case so anchor-to-anchor pulls show.
+            stats = fetch_puller_stats(puller)
+            if stats:
+                # Only keep the entries not equal to puller itself.
+                stats = {k: v for k, v in stats.items() if k != puller}
+        else:
+            stats = fetch_puller_stats(puller)
+        snapshot["pullers"][puller] = stats  # may be None (unreachable)
+
+    log_path = Path(args.log)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("a") as f:
+        f.write(json.dumps(snapshot, separators=(",", ":")) + "\n")
+
+    if args.print:
+        print(json.dumps(snapshot, indent=2))
+    else:
+        # Brief one-line stderr summary so journal logs are useful.
+        ida = snapshot["anchors"].get("ida.hrdag.net", {})
+        ant = snapshot["anchors"].get("ant.hrdag.net", {})
+        ii_dist = snapshot["orgs"].get("ii", {}).get("holders_distribution", {})
+        km0_dist = snapshot["orgs"].get("km0", {}).get("holders_distribution", {})
+        print(
+            f"[{snapshot['ts_iso']}] "
+            f"ida.sole={ida.get('sole_holder_count')} ii={ii_dist} | "
+            f"ant.sole={ant.get('sole_holder_count')} km0={km0_dist}",
+            file=sys.stderr,
+        )
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

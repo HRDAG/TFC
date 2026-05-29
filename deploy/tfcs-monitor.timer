@@ -1,0 +1,21 @@
+# Author: PB and Claude
+# Date: 2026-05-29
+# License: (c) HRDAG, 2026, GPL-2 or newer
+#
+# ---
+# deploy/tfcs-monitor.timer
+#
+# Runs tfcs-monitor.service every 30 min, forever. Persistent=true so a
+# missed run (host down) fires once on the next boot rather than being
+# silently skipped — keeps the series continuous for windowed analysis.
+
+[Unit]
+Description=Run tfcs-monitor every 30 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

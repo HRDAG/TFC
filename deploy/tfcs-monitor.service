@@ -1,0 +1,24 @@
+# Author: PB and Claude
+# Date: 2026-05-29
+# License: (c) HRDAG, 2026, GPL-2 or newer
+#
+# ---
+# deploy/tfcs-monitor.service
+#
+# One-shot snapshot of cluster replication progress. Triggered by
+# tfcs-monitor.timer every 30 min. Runs as the tfcs user so it can read
+# scott's copies DB and write the world-readable series under
+# /var/lib/tfcs-monitor (created by `make install`).
+
+[Unit]
+Description=tfcs replication-progress snapshot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=tfcs
+Group=tfcs
+ExecStart=/usr/local/bin/tfcs-monitor
+Nice=10
+# Output goes to the journal: `journalctl -u tfcs-monitor.service`
