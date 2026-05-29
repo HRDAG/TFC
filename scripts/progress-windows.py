@@ -45,7 +45,7 @@ import json
 import sys
 from pathlib import Path
 
-DEFAULT_INPUT = "/var/log/tfcs/replication-progress.jsonl"
+DEFAULT_INPUT = "/var/lib/tfcs-monitor/replication-progress.jsonl"
 DEFAULT_WINDOWS = "6,12,24,48"
 BUCKETS = ["1", "2", "3", "4", "5+"]
 FLOW_COUNTERS = ["total_succeeded", "total_bytes_pulled", "total_failed", "total_attempts"]
@@ -91,9 +91,10 @@ def window_start(snaps: list[dict], end_ts: int, hours: float) -> tuple[int, boo
     idx = bisect.bisect_left(ts_list, target)
     if idx >= len(snaps):
         idx = len(snaps) - 1
-    clamped = snaps[idx]["ts"] > target  # earliest snapshot is later than target
-    if idx == 0 and snaps[0]["ts"] > target:
-        clamped = True
+    # Clamped ONLY when the series doesn't reach back to the window start
+    # (target predates the earliest snapshot). A boundary snapshot landing
+    # just after `target` is the normal 30-min-sampling case, not clamping.
+    clamped = target < snaps[0]["ts"]
     return idx, clamped
 
 

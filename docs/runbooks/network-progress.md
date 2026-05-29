@@ -45,13 +45,13 @@ plain `python3 progress-windows.py` works without `uv`.
 `progress-windows.py` reads a JSONL **time series**, one snapshot per line,
 produced by the collector (`tfcs-monitor`, see [Operational notes](#operational-notes)):
 
-- **Current path:** `scott:/var/log/tfcs/replication-progress.jsonl`
-  (world-readable, `0664`). *Planned:* `scott:/var/lib/tfcs-monitor/` — see
-  Operational notes.
+- **Path:** `scott:/var/lib/tfcs-monitor/replication-progress.jsonl`
+  (world-readable). Migrated here from `/var/log/tfcs/` on 2026-05-29; the
+  old path is frozen (no longer written) — don't read it.
 - **Cadence:** one snapshot every 30 min.
 - **Completeness:** verify before trusting a window —
   ```bash
-  wc -l /var/log/tfcs/replication-progress.jsonl    # ~48/day
+  wc -l /var/lib/tfcs-monitor/replication-progress.jsonl    # ~48/day
   ```
   As of 2026-05-29 the series was continuous over ~14.6 days (median gap
   exactly 1800 s, worst gap one missed run). Windows up to ~48h have dense
@@ -191,11 +191,10 @@ SSH keys for fleet access live under `~/.ssh/ephemeral/` (see
   30 min. Source of truth is `TFC/scripts/`; installed on scott to
   `/usr/local/bin/tfcs-monitor`, run as `tfcs`, **permanently** (not a
   temporary watcher).
-- **Planned data path:** `/var/lib/tfcs-monitor/replication-progress.jsonl`
-  (FHS: it's data, not a log). Note `/var/lib/tfcs` itself is the `tfcs`
-  user's *home directory* (holds `.ssh`, `.sigstore`) — monitor data goes in
-  a *sibling* `tfcs-monitor` dir so "world-readable" never touches the
-  service-account home. Until that migration lands, the source path is
-  `/var/log/tfcs/replication-progress.jsonl` (already world-readable).
+- **Data path:** `/var/lib/tfcs-monitor/replication-progress.jsonl`
+  (FHS: it's data, not a log; world-readable `0644`). Note `/var/lib/tfcs`
+  itself is the `tfcs` user's *home directory* (holds `.ssh`, `.sigstore`) —
+  monitor data lives in a *sibling* `tfcs-monitor` dir so "world-readable"
+  never touches the service-account home.
 - **This tool is single-machine** (scott only) and intentionally **not**
   ansible-managed — install it with `make install` from this repo.
