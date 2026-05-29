@@ -205,3 +205,46 @@ this TUI needs an SSH tunnel:
 ```bash
 ssh -L 9090:127.0.0.1:9090 scott
 ```
+
+---
+
+## `/tfcs-status` — Replication Convergence Report (Claude skill)
+
+Unlike the two dashboards above, this is **not an app you run** — it is a
+[Claude Code](https://docs.claude.com/en/docs/claude-code) **skill**. From a
+Claude Code session in this repo (or in the
+[tfcs](https://github.com/HRDAG/tfcs) repo, which carries a thin pointer to
+the same skill), invoke:
+
+```
+/tfcs-status            # all orgs, 6/12/24/48h windows
+/tfcs-status ii         # one org (ii = hrdag, km0 = datacivica)
+/tfcs-status 6,24       # custom windows, in hours
+```
+
+Claude SSHes to `scott`, runs the analyzer over the snapshot series, and
+writes a **convergence report**: per-org sole-copy (single-holder) burn-down
+rate, whether it is accelerating or stalling (recent windows vs the 48h
+average), an ETA to clear the at-risk backlog, anchor seeding, and
+per-puller transfer volume.
+
+**You need SSH access to `scott`** (tailnet membership + your key) — the
+skill reads cluster state there. It is **read-only**: it pulls the latest
+tooling, runs the analyzer, and reads the series; it never repairs, deletes,
+re-pulls, or otherwise mutates the cluster.
+
+### Associated files
+
+| File | Role |
+|------|------|
+| `.claude/skills/tfcs-status/SKILL.md` | The skill — run command, report shape, interpretation rules |
+| `scripts/progress-windows.py` | Analyzer — reads the series, emits per-org/per-window deltas (stdlib-only) |
+| `scripts/tfcs-monitor` | Collector — snapshots cluster state; installed on scott at `/usr/local/bin/tfcs-monitor`, run as `tfcs` via a systemd timer every 30 min |
+| `deploy/tfcs-monitor.{service,timer}` | systemd units for the collector |
+| `docs/runbooks/network-progress.md` | Runbook — how to read the report, plus SSH drill-down into node logs |
+| `Makefile` | `make install` (host-detecting) / `migrate` / `verify` — deploy and operate the collector on scott |
+
+The collector writes a world-readable JSONL time series to
+`scott:/var/lib/tfcs-monitor/replication-progress.jsonl`; the analyzer reads
+that file. It is a single-machine tool (scott only), installed via the
+Makefile rather than ansible.
