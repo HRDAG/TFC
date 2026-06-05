@@ -6,19 +6,21 @@
 # ---
 # scripts/tfcs-monitor
 #
-# Periodic snapshot of cluster replication progress for ant + ida (the
-# two anchors carrying sole-copy corpora). One JSONL line per run; the
-# series is read by progress-windows.py for windowed convergence analysis.
+# Periodic snapshot of cluster replication progress for the per-org anchors
+# carrying sole-copy corpora (ida=ii, ant=km0, lizo=datacivica, dwight=ijla).
+# One JSONL line per run; the series is read by progress-windows.py for
+# windowed convergence analysis.
 #
 # Plain python3 (stdlib only) on purpose: this runs unattended as the tfcs
 # user from a systemd timer, so it avoids any uv/venv resolution at run time.
 #
 # Captured per snapshot:
-#   - per-anchor (ida, ant): /status copies_count + sole_holder_count
+#   - per-anchor (ida, ant, lizo, dwight): /status copies_count +
+#     sole_holder_count
 #   - per-puller × per-source: /rsync-stats total_succeeded, total_bytes,
-#     agg_mbps (cluster-wide rate of pulls FROM ida and FROM ant)
+#     agg_mbps (cluster-wide rate of pulls FROM each anchor)
 #   - per-org holder distribution from scott's local DB:
-#       holders=1 (sole), 2, 3, 4, 5+ for org=ii and org=km0
+#       holders=1 (sole), 2, 3, 4, 5+ for ii, km0, datacivica, ijla
 #
 # Best-effort: exits non-zero only on hard failures, otherwise degrades
 # gracefully when individual peers are unreachable.
@@ -39,8 +41,9 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-# Anchors we're tracking (the corpora-holders this tool was built to watch).
-ANCHORS = ["ida.hrdag.net", "ant.hrdag.net"]
+# Anchors we're tracking (the per-org originators carrying sole-copy corpora).
+# One per org: ii→ida, km0→ant, datacivica→lizo, ijla→dwight.
+ANCHORS = ["ida.hrdag.net", "ant.hrdag.net", "lizo.hrdag.net", "dwight.hrdag.net"]
 
 # Pullers — every active node EXCEPT the anchor itself contributes pulls.
 # Self-pull doesn't exist; we filter the anchor out per-source below.
@@ -48,11 +51,18 @@ ALL_NODES = [
     "scott.hrdag.net", "ben.hrdag.net", "chll.hrdag.net",
     "ida.hrdag.net", "ant.hrdag.net", "ipfs1.hrdag.net",
     "lizo.hrdag.net", "meerkat.hrdag.net", "pihost.hrdag.net",
-    "snowball.hrdag.net",
+    "snowball.hrdag.net", "dwight.hrdag.net",
 ]
 
-# Org → anchor (used to label the holder distribution per org).
-ORGS = {"ii": "ida.hrdag.net", "km0": "ant.hrdag.net"}
+# Org → anchor (originating node). Keys drive the per-org holder
+# distribution (the headline burn-down); the value labels the org's anchor
+# in the ANCHORS + PULL FLOWS sections and the stderr summary.
+ORGS = {
+    "ii": "ida.hrdag.net",
+    "km0": "ant.hrdag.net",
+    "datacivica": "lizo.hrdag.net",
+    "ijla": "dwight.hrdag.net",
+}
 
 # scott-local DB used for ground-truth org holder distribution.
 SCOTT_DB = "/storage/tfcs/state/scott.hrdag.net.db"
@@ -131,7 +141,7 @@ def fetch_org_distribution(db_path: str) -> dict:
                 # Cap labels at 5+ to keep snapshot stable as the target shifts.
                 key = str(n) if n < 5 else "5+"
                 buckets[key] = buckets.get(key, 0) + int(c_str)
-            # Total ii/km0 commits across cluster
+            # Total commits for this org across the cluster
             cp2 = subprocess.run(
                 ["sqlite3", db_path,
                  f"SELECT COUNT(DISTINCT commit_id) FROM copies "
@@ -201,16 +211,13 @@ def main() -> int:
         print(json.dumps(snapshot, indent=2))
     else:
         # Brief one-line stderr summary so journal logs are useful.
-        ida = snapshot["anchors"].get("ida.hrdag.net", {})
-        ant = snapshot["anchors"].get("ant.hrdag.net", {})
-        ii_dist = snapshot["orgs"].get("ii", {}).get("holders_distribution", {})
-        km0_dist = snapshot["orgs"].get("km0", {}).get("holders_distribution", {})
-        print(
-            f"[{snapshot['ts_iso']}] "
-            f"ida.sole={ida.get('sole_holder_count')} ii={ii_dist} | "
-            f"ant.sole={ant.get('sole_holder_count')} km0={km0_dist}",
-            file=sys.stderr,
-        )
+        parts = []
+        for org, anchor in ORGS.items():
+            dist = snapshot["orgs"].get(org, {}).get("holders_distribution", {})
+            asole = snapshot["anchors"].get(anchor, {}).get("sole_holder_count")
+            short = anchor.split(".")[0]
+            parts.append(f"{org} sole={dist.get('1', 0)} ({short}.sole={asole})")
+        print(f"[{snapshot['ts_iso']}] " + " | ".join(parts), file=sys.stderr)
 
     return 0
 
