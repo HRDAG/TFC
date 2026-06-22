@@ -223,9 +223,9 @@ the same skill), invoke:
 ```
 
 Claude SSHes to `scott`, runs the analyzer over the snapshot series, and
-writes a **convergence report**: per-org sole-copy (single-holder) burn-down
-rate, whether it is accelerating or stalling (recent windows vs the 48h
-average), an ETA to clear the at-risk backlog, anchor seeding, and
+writes a **convergence report**: per-org single-copy (single-holder)
+replication rate, whether it is accelerating or stalling (recent windows vs
+the 48h average), an ETA to clear the at-risk backlog, anchor seeding, and
 per-puller transfer volume.
 
 **You need SSH access to `scott`** (tailnet membership + your key) — the

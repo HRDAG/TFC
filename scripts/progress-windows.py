@@ -12,7 +12,7 @@
 #
 # Read the tfcs-monitor replication-progress JSONL time series and report
 # network convergence over nested time windows (default 6/12/24/48h), so
-# you can see whether sole-copy burn-down is accelerating or stalling.
+# you can see whether single-copy replication is accelerating or stalling.
 #
 # Stats are emitted MAXIMALLY DISAGGREGATED: every per-org holder bucket,
 # every anchor counter, every puller<-source flow is shown raw. Aggregation

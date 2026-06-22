@@ -10,17 +10,18 @@ docs/runbooks/network-progress.md
 # Runbook: network progress over rolling windows
 
 **Question this answers:** is the cluster *converging* — and is convergence
-**accelerating or stalling**? Concretely: how fast is sole-copy burn-down
-per org, accounting for new commits arriving, and is the network actually
-moving bytes to make it happen.
+**accelerating or stalling**? Concretely: how fast are single-copy commits
+being replicated to additional nodes per org, accounting for new commits
+arriving, and is the network actually moving bytes to make it happen.
 
 Use it when you want a fast read on replication health without eyeballing
 raw snapshots, after a release that was meant to unstick replication, or
 when deciding whether a backlog will clear on its own.
 
-The most important number is **per-org sole-copy burn-down** (`holders=1`),
-read against **new ingest** (`total_commits` Δ) so you don't mistake "no new
-sole copies arriving" for "existing sole copies getting promoted."
+The most important number is **per-org single-copy replication** (`holders=1`
+falling), read against **new ingest** (`total_commits` Δ) so you don't
+mistake "no new sole copies arriving" for "existing sole copies getting
+replicated to a second node."
 
 ---
 
@@ -91,16 +92,17 @@ How to read it, line by line:
   (ingest minus tombstone/revoke removals). Here `+0` across all windows:
   **no new ingest**, so everything below is pure replication catch-up.
 - **`holders=1 SOLE`** — the headline. `10914` commits exist on exactly one
-  node. Burning down at `−7.8/h` (last 6h) vs `−6.1/h` (last 24h): the
-  **recent rate is faster than the daily average → convergence is
-  accelerating.** A 6h rate *slower* than the 48h rate would mean stalling.
+  node. Falling at `−7.8/h` (last 6h) vs `−6.1/h` (last 24h) as these
+  commits get replicated to additional nodes: the **recent rate is faster
+  than the daily average → convergence is accelerating.** A 6h rate
+  *slower* than the 48h rate would mean stalling.
 - **`holders=2..5+`** — where the sole copies *went*. Over 48h the buckets
   net to zero (1:−325, 2:−100, 3:+278, 4:+147) against `total_commits` Δ=0:
   commits climbed the ladder 1,2 → 3,4. This conservation check is your
   sanity test that the numbers are coherent.
 - **`sole_exits (est)`** — commits that left `holders=1` (promotions +
   sole-commit tombstones, lumped). Equals `new_commits − Δholders=1`. With
-  no new ingest it equals the burn-down; with ingest it separates
+  no new ingest it equals the replication rate; with ingest it separates
   "promoted" from "newly arrived as sole." See the [caveat](#caveats) on the
   identity.
 
@@ -114,8 +116,9 @@ ANCHORS
 - **`sole_holder_count`** is the anchor's own count of commits only it holds
   — should track the org's `holders=1` (it does: −325 == ii bucket-1).
   Divergence here vs the org bucket means a metadata-convergence lag.
-- **`copies_count`** flat while sole burns down = the anchor keeps its
-  copies; *other* nodes are gaining them. That's healthy replication.
+- **`copies_count`** flat while the single-copy count falls = the anchor
+  keeps its copies; *other* nodes are gaining them. That's healthy
+  replication.
 - **`[restart in window]`** — the agent's `uptime_seconds` is less than the
   widest window's span, so a restart happened somewhere in the lookback.
   Treat that anchor's flow counters with the reset caveat below.
@@ -126,8 +129,9 @@ PULL FLOWS (puller <- source; integrated totals over each window)
 ```
 
 - Per `puller <- source`: completed pulls and bytes moved **in the window**.
-  This is the "is the network actually working" view — burn-down with zero
-  pull flow would mean the metadata moved but the bytes didn't.
+  This is the "is the network actually working" view — a falling single-copy
+  count with zero pull flow would mean the metadata moved but the bytes
+  didn't.
 - **`!`** = a cumulative counter reset (agent restart) inside that window.
   The total is still correct (integrated piecewise across the reset), but
   it tells you the raw counters aren't a clean end−start.
