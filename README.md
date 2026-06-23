@@ -25,14 +25,19 @@ Bitcoin block.
 │  │ HRDAG Office │  │ Chilliwack, BC  │  │  Partner nodes           │   │
 │  │              │  │                 │  │                          │   │
 │  │  nas         │  │      chll       │  │  scott  ant  ida         │   │
-│  └──────────────┘  └─────────────────┘  │  lizo   myrtle           │   │
+│  └──────────────┘  └─────────────────┘  │  lizo   dwight           │   │
 │                                          └──────────────────────────┘   │
 │  ┌────────────────────────────────┐                                      │
 │  │  Storage nodes                 │      ┌──────────────────────────┐   │
 │  │                                │      │  TechFutures (coloc.)    │   │
-│  │  ipfs1    snowball             │      │  kj (GPU)  ben (storage) │   │
-│  │  meerkat  pihost               │      └──────────────────────────┘   │
-│  │  alex (coming soon)            │                                      │
+│  │  snowball  meerkat             │      │  kj (GPU)  ben (storage) │   │
+│  │  pihost                        │      └──────────────────────────┘   │
+│  │                                │                                      │
+│  └────────────────────────────────┘                                      │
+│  ┌────────────────────────────────┐                                      │
+│  │  Hypervisors (Proxmox)         │                                      │
+│  │  sugihara (Vancouver)          │                                      │
+│  │  fred (Chicago / II)           │                                      │
 │  └────────────────────────────────┘                                      │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
@@ -42,6 +47,10 @@ policy), **active** (ingest + replicate), **archive** (long-term backstop,
 gets all commits), and **storage** (contribute capacity, respects trust
 matching). Partner nodes are owned and operated by their respective
 organizations; HRDAG coordinates but does not administer them.
+
+Two **hypervisors** (`sugihara`, `fred`) sit outside these classes: they run
+Proxmox and host service VMs rather than pipeline data, and will take over
+infrastructure roles such as `gate`.
 
 ---
 
@@ -72,6 +81,8 @@ Four tools give four different views of the same system:
 | [server-documentation](https://github.com/HRDAG/server-documentation) | Documents every machine we operate: hardware, network, storage, operational notes |
 | [hrdag-ansible](https://github.com/HRDAG/hrdag-ansible) | Configures TFC machines: tailnet onboarding, SSH hardening, pipeline service deployment |
 | [hrdag-monitor](https://github.com/HRDAG/hrdag-monitor) | Daily infrastructure health reports: vendor-researched thresholds, GREEN/YELLOW/RED classification |
+| [sugihara-builds](https://github.com/HRDAG/sugihara-builds) | Build recipes + ops docs for the `sugihara` Proxmox host (Vancouver): immutable service VMs |
+| [fred-builds](https://github.com/HRDAG/fred-builds) | Build recipes + ops docs for the `fred` Proxmox host (Chicago / II): immutable service VMs |
 | [filelister](https://github.com/HRDAG/filelister) | First pipeline stage: scans filesystems, catalogs file metadata into PostgreSQL |
 | [ntx](https://github.com/HRDAG/ntx) | Second stage: packages files into encrypted, signed, Bitcoin-timestamped commits |
 | [tfcs](https://github.com/HRDAG/tfcs) | Third stage: replicates commits across the coalition until every commit survives any single failure |
@@ -114,7 +125,7 @@ Four tools give four different views of the same system:
                       The TFC Coalition
           ┌──────────────────────────────────────────────┐
           │                                              │
-          │   HRDAG ←──────→ DataCivica ←──────→ II     │
+          │   HRDAG ←──────→ DataCívica ←──────→ II     │
           │     ↕                                ↕       │
           │   IJLA  ←──────────────────→ Km0            │
           │                                              │
@@ -130,7 +141,7 @@ Four tools give four different views of the same system:
 │  chll    │   │ snowball  │    │ S3       │   │ decentralized    │
 │  ben     │   │ meerkat   │    │ (planned)│   │ permanent        │
 │          │   │ pihost    │    │          │   │ storage          │
-│          │   │ ipfs1     │    │          │   │                  │
+│          │   │           │    │          │   │                  │
 └──────────┘   └───────────┘    └──────────┘   └──────────────────┘
 ```
 
