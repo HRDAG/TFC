@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import time
 import tomllib
 from dataclasses import dataclass, field
@@ -22,6 +23,47 @@ from datetime import datetime
 from pathlib import Path
 
 import aiohttp
+
+
+STALE_AFTER = 30.0
+EXPIRED_AFTER = 120.0
+NTX_STALE_AFTER = 300.0
+NTX_EXPIRED_AFTER = 600.0
+
+
+@dataclass(frozen=True)
+class ClusterPollResult:
+    """Full-refresh values plus explicit endpoint outcomes."""
+
+    status_by_host: dict[str, dict | None]
+    node_status: dict[str, str]
+    heartbeat_age: dict[str, float]
+    nodes_succeeded: bool
+    replication: dict[int, int]
+    velocity: dict | None
+    site_distribution: dict[int, int] | None
+    sole_holders: int
+    by_org: dict
+    replication_succeeded: bool
+
+
+@dataclass(frozen=True)
+class HeartbeatPollResult:
+    """Heartbeat matrix with success recorded for every observer."""
+
+    matrix: dict[str, dict[str, float]]
+    succeeded_by_host: dict[str, bool]
+
+
+def is_valid_velocity(value: dict | None) -> bool:
+    """Return whether a velocity response contains usable nonnegative rates."""
+    if not isinstance(value, dict):
+        return False
+    try:
+        rates = (float(value["copies_per_min"]), float(value["bytes_per_min"]))
+    except (KeyError, TypeError, ValueError):
+        return False
+    return all(math.isfinite(rate) and rate >= 0 for rate in rates)
 
 
 # ---------------------------------------------------------------------------
@@ -64,6 +106,16 @@ async def fetch_ntx_status(
     return None
 
 
+async def poll_ntx_statuses(
+    session: aiohttp.ClientSession, hosts: list[str], ntx_port: int,
+) -> list[tuple[str, dict | None]]:
+    """Poll every configured ingest endpoint concurrently."""
+    results = await asyncio.gather(*(
+        fetch_ntx_status(session, host, ntx_port) for host in hosts
+    ))
+    return list(zip(hosts, results))
+
+
 async def fetch_nodes(
     session: aiohttp.ClientSession, host: str, http_port: int,
 ) -> list[dict] | None:
@@ -84,7 +136,7 @@ async def fetch_nodes(
 async def fetch_replication(
     session: aiohttp.ClientSession, host: str, http_port: int,
     target_copies: int, window_minutes: int = 10,
-) -> tuple[dict[int, int], dict | None, dict[int, int], int, dict] | None:
+) -> tuple[dict[int, int], dict | None, dict[int, int] | None, int, dict] | None:
     """GET /replication?target=N&window=W from a single peer.
 
     Returns (distribution, velocity, site_dist, sole_holders, by_org) or None on failure.
@@ -103,7 +155,11 @@ async def fetch_replication(
                 data = await resp.json()
                 local = data.get("local", data)  # v0.6+ nests under "local"; older = top-level
                 dist = {int(k): v for k, v in local.get("distribution", {}).items()}
-                site_dist = {int(k): v for k, v in local.get("site_distribution", {}).items()}
+                site_raw = local.get("site_distribution")
+                site_dist = (
+                    {int(k): v for k, v in site_raw.items()}
+                    if isinstance(site_raw, dict) else None
+                )
                 sole_holders = local.get("sole_holder_count", 0)
                 velocity = data.get("velocity")  # None if endpoint doesn't support it yet
                 if velocity is not None and "total" in velocity:
@@ -136,46 +192,44 @@ async def fetch_replication(
 
 async def poll_cluster(
     peer_hosts: list[str], http_port: int, target_copies: int,
-) -> tuple[list[dict], dict[str, str], dict[str, float], dict[int, int], dict | None, dict[int, int], int, dict]:
-    """Poll /status, /nodes, and /replication from all peers.
-
-    Returns (statuses, node_status, heartbeat_age, replication, velocity, site_dist, sole_holders, by_org) where:
-      statuses       = list of /status response dicts (one per responding peer)
-      node_status    = {node_id: "alive"|"suspect"|"dead"|"unreachable"}
-      heartbeat_age  = {node_id: heartbeat_age_seconds}
-      replication    = {copies: count} histogram (empty if endpoint unavailable)
-      velocity       = server-computed velocity dict or None
-      site_dist      = {sites: count} histogram from /replication local.site_distribution
-      sole_holders   = cluster-level sole_holder_count from /replication
-      by_org         = {org: {distribution, site_distribution, by_node}} per-org breakdown
-    """
+) -> ClusterPollResult:
+    """Poll cluster endpoints, preserving empty successes and failed attempts."""
     async with aiohttp.ClientSession() as session:
         # Fetch /status from all peers concurrently
         tasks = [fetch_status(session, h, http_port) for h in peer_hosts]
         results = await asyncio.gather(*tasks)
+        status_by_host = dict(zip(peer_hosts, results))
         statuses = [r for r in results if r is not None]
 
-        # Fetch /nodes from first responding peer for failure-detector view
+        # Fetch /nodes from all peers concurrently; use the first successful
+        # response in configured order for the failure-detector view.
         node_status: dict[str, str] = {}
         heartbeat_age: dict[str, float] = {}
-        for host in peer_hosts:
-            nodes = await fetch_nodes(session, host, http_port)
+        nodes_succeeded = False
+        node_results, replication_results = await asyncio.gather(
+            asyncio.gather(*(fetch_nodes(session, host, http_port) for host in peer_hosts)),
+            asyncio.gather(*(
+                fetch_replication(session, host, http_port, target_copies)
+                for host in peer_hosts
+            )),
+        )
+        for nodes in node_results:
             if nodes is not None:
+                nodes_succeeded = True
                 node_status = {n["node_id"]: n["status"] for n in nodes}
                 heartbeat_age = {n["node_id"]: n.get("heartbeat_age_seconds") or 0.0 for n in nodes}
                 break
 
-        # Fetch /replication from first responding peer
+        # Use the first successful /replication response in configured order.
         replication: dict[int, int] = {}
         velocity: dict | None = None
-        site_dist: dict[int, int] = {}
+        site_dist: dict[int, int] | None = None
         sole_holders: int = 0
         by_org: dict = {}
-        for host in peer_hosts:
-            result = await fetch_replication(
-                session, host, http_port, target_copies,
-            )
+        replication_succeeded = False
+        for result in replication_results:
             if result is not None:
+                replication_succeeded = True
                 replication, velocity, site_dist, sole_holders, by_org = result
                 break
 
@@ -185,7 +239,11 @@ async def poll_cluster(
             if nid not in responding_ids:
                 node_status[nid] = "unreachable"
 
-    return statuses, node_status, heartbeat_age, replication, velocity, site_dist, sole_holders, by_org
+    return ClusterPollResult(
+        status_by_host, node_status, heartbeat_age, nodes_succeeded,
+        replication, velocity, site_dist, sole_holders, by_org,
+        replication_succeeded,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -284,17 +342,16 @@ async def fetch_node_traffic(
 
 async def poll_traffic_matrix(
     peer_hosts: list[str], http_port: int,
-) -> list[dict]:
+) -> list[tuple[str, dict | None]]:
     """Poll /traffic from all peers concurrently.
 
-    Returns: List of traffic reports from responding nodes.
-             [{"node_id": "scott.hrdag.net", "traffic": {...},
-               "window_seconds": 10.0, "samples_in_window": 4, ...}, ...]
+    Returns one (host, response) pair per attempted node; response is None on
+    failure so callers can record unsuccessful attempts.
     """
     async with aiohttp.ClientSession() as session:
         tasks = [fetch_node_traffic(session, h, http_port) for h in peer_hosts]
         results = await asyncio.gather(*tasks)
-        return [r for r in results if r is not None]
+        return list(zip(peer_hosts, results))
 
 
 async def fetch_node_all(
@@ -303,7 +360,7 @@ async def fetch_node_all(
     http_port: int,
     include_global: bool = False,
     target_copies: int = 3,
-) -> tuple[dict | None, dict | None, list[dict] | None, dict[int, int] | None, dict | None, dict[int, int], int, dict]:
+) -> tuple[dict | None, dict | None, list[dict] | None, dict[int, int] | None, dict | None, dict[int, int] | None, int, dict]:
     """Fetch /status and /traffic from a single node.
 
     If include_global is True, also fetch /nodes and /replication
@@ -326,7 +383,7 @@ async def fetch_node_all(
             return_exceptions=False,
         )
         replication, velocity, site_dist, sole_holders, by_org = (
-            repl_result if repl_result is not None else (None, None, {}, 0, {})
+            repl_result if repl_result is not None else (None, None, None, 0, {})
         )
     else:
         # Only fetch per-node endpoints
@@ -337,7 +394,7 @@ async def fetch_node_all(
         nodes_list = None
         replication = None
         velocity = None
-        site_dist = {}
+        site_dist = None
         sole_holders = 0
         by_org = {}
 
@@ -418,13 +475,43 @@ class NodeSnapshot:
     traffic_response: dict | None = None   # Raw /traffic JSON
     node_status: str = "unknown"           # From /nodes endpoint
     heartbeat_age: float = 0.0             # From /nodes endpoint
-    last_updated: float = 0.0              # time.monotonic() when polled
+    status_freshness: "SourceFreshness" = field(default_factory=lambda: SourceFreshness(STALE_AFTER, EXPIRED_AFTER))
+    traffic_freshness: "SourceFreshness" = field(default_factory=lambda: SourceFreshness(STALE_AFTER, EXPIRED_AFTER))
+
+
+@dataclass
+class SourceFreshness:
+    """Attempt/success timestamps and age policy for one data source."""
+
+    stale_after: float
+    expired_after: float
+    last_attempt: float | None = None
+    last_success: float | None = None
+
+    def attempted(self, now: float, succeeded: bool) -> None:
+        self.last_attempt = now
+        if succeeded:
+            self.last_success = now
+
+    def age(self, now: float) -> float | None:
+        return None if self.last_success is None else max(0.0, now - self.last_success)
+
+    def state(self, now: float) -> str:
+        age = self.age(now)
+        if age is None:
+            return "missing"
+        if age >= self.expired_after:
+            return "expired"
+        if age >= self.stale_after:
+            return "stale"
+        return "fresh"
 
 
 class NodeDataStore:
     """In-memory accumulator for rolling node polls."""
 
-    def __init__(self) -> None:
+    def __init__(self, clock=time.monotonic) -> None:
+        self._clock = clock
         self._nodes: dict[str, NodeSnapshot] = {}  # node_id -> snapshot
         self._replication: dict[int, int] = {}      # copies -> count
         self._node_status: dict[str, str] = {}      # node_id -> alive/suspect/dead
@@ -436,18 +523,33 @@ class NodeDataStore:
         self._cluster_sole_holders: int = 0            # sole_holder_count from /replication
         self._by_org: dict = {}                        # {org: {distribution, site_distribution, by_node}}
         self._ntx_statuses: dict[str, dict] = {}       # node_id -> ntx /status JSON
+        self._ntx_freshness: dict[str, SourceFreshness] = {}
+        self._sources = {
+            "nodes": SourceFreshness(STALE_AFTER, EXPIRED_AFTER),
+            "replication": SourceFreshness(STALE_AFTER, EXPIRED_AFTER),
+            "sites": SourceFreshness(STALE_AFTER, EXPIRED_AFTER),
+            "velocity": SourceFreshness(STALE_AFTER, EXPIRED_AFTER),
+        }
+        self._heartbeat_freshness: dict[str, SourceFreshness] = {}
 
-    def update_node(self, node_id: str, status: dict | None, traffic: dict | None) -> None:
+    def update_node(
+        self, node_id: str, status: dict | None, traffic: dict | None,
+        *, status_attempted: bool = True, traffic_attempted: bool = True,
+    ) -> None:
         """Update data for a single node after polling it."""
         if node_id not in self._nodes:
             self._nodes[node_id] = NodeSnapshot(node_id=node_id)
 
         snapshot = self._nodes[node_id]
+        now = self._clock()
+        if status_attempted:
+            snapshot.status_freshness.attempted(now, status is not None)
+        if traffic_attempted:
+            snapshot.traffic_freshness.attempted(now, traffic is not None)
         if status is not None:
             snapshot.status_response = status
         if traffic is not None:
             snapshot.traffic_response = traffic
-        snapshot.last_updated = time.monotonic()
         self._cycle_count += 1
 
     def update_global(self, node_status: dict[str, str],
@@ -457,20 +559,45 @@ class NodeDataStore:
                       velocity: dict | None = None,
                       site_distribution: dict[int, int] | None = None,
                       cluster_sole_holders: int = 0,
-                      by_org: dict | None = None) -> None:
+                      by_org: dict | None = None,
+                      nodes_succeeded: bool = True,
+                      replication_succeeded: bool = True,
+                      heartbeat_outcomes: dict[str, bool] | None = None) -> None:
         """Update global data (from /nodes and /replication endpoints)."""
-        self._node_status = node_status
-        self._heartbeat_age = heartbeat_age
-        self._replication = replication
+        now = self._clock()
+        self._sources["nodes"].attempted(now, nodes_succeeded)
+        self._sources["replication"].attempted(now, replication_succeeded)
+        self._sources["sites"].attempted(
+            now, replication_succeeded and site_distribution is not None,
+        )
+        if replication_succeeded:
+            self._sources["velocity"].attempted(now, is_valid_velocity(velocity))
+        if heartbeat_outcomes is not None:
+            for host, succeeded in heartbeat_outcomes.items():
+                freshness = self._heartbeat_freshness.setdefault(
+                    host, SourceFreshness(STALE_AFTER, EXPIRED_AFTER),
+                )
+                freshness.attempted(now, succeeded)
+        if nodes_succeeded:
+            self._node_status = node_status
+            self._heartbeat_age = heartbeat_age
+        if replication_succeeded:
+            self._replication = replication
         if heartbeat_matrix is not None:
-            self._heartbeat_matrix = heartbeat_matrix
-        if velocity is not None:
-            self._velocity = velocity
-        if site_distribution is not None:
-            self._site_distribution = site_distribution
-        self._cluster_sole_holders = cluster_sole_holders
-        if by_org is not None:
-            self._by_org = by_org
+            if heartbeat_outcomes is None:
+                self._heartbeat_matrix = heartbeat_matrix
+            else:
+                for host, succeeded in heartbeat_outcomes.items():
+                    if succeeded:
+                        self._heartbeat_matrix[host] = heartbeat_matrix.get(host, {})
+        if replication_succeeded:
+            if is_valid_velocity(velocity):
+                self._velocity = velocity
+            if site_distribution is not None:
+                self._site_distribution = site_distribution
+            self._cluster_sole_holders = cluster_sole_holders
+            if by_org is not None:
+                self._by_org = by_org
 
         # Update per-node snapshots with status and heartbeat data
         for node_id, status in node_status.items():
@@ -486,11 +613,19 @@ class NodeDataStore:
     @property
     def statuses(self) -> list[dict]:
         """All accumulated /status responses (for Overview tab widgets)."""
-        return [
-            snapshot.status_response
-            for snapshot in self._nodes.values()
-            if snapshot.status_response is not None
-        ]
+        now = self._clock()
+        result = []
+        for snapshot in self._nodes.values():
+            if snapshot.status_response is None:
+                continue
+            value = dict(snapshot.status_response)
+            state = snapshot.status_freshness.state(now)
+            value["_freshness"] = state
+            value["_seen_age"] = snapshot.status_freshness.age(now)
+            if state == "expired":
+                value["claims"] = []
+            result.append(value)
+        return result
 
     @property
     def replication(self) -> dict[int, int]:
@@ -510,10 +645,12 @@ class NodeDataStore:
     @property
     def traffic_reports(self) -> list[dict]:
         """All accumulated /traffic responses (for Traffic/Heatmap widgets)."""
+        now = self._clock()
         return [
             snapshot.traffic_response
             for snapshot in self._nodes.values()
             if snapshot.traffic_response is not None
+            and snapshot.traffic_freshness.state(now) != "expired"
         ]
 
     @property
@@ -524,12 +661,17 @@ class NodeDataStore:
     @property
     def heartbeat_matrix(self) -> dict[str, dict[str, float]]:
         """Heartbeat age matrix: observer -> {observed -> age_seconds}."""
-        return self._heartbeat_matrix
+        now = self._clock()
+        return {
+            host: values for host, values in self._heartbeat_matrix.items()
+            if host not in self._heartbeat_freshness
+            or self._heartbeat_freshness[host].state(now) != "expired"
+        }
 
     @property
     def velocity(self) -> dict | None:
-        """Server-computed velocity from /replication?window=N endpoint."""
-        return self._velocity
+        """Current server velocity, excluding stale or expired samples."""
+        return self._velocity if self.source_state("velocity") == "fresh" else None
 
     @property
     def site_distribution(self) -> dict[int, int]:
@@ -548,24 +690,66 @@ class NodeDataStore:
 
     def update_ntx(self, node_id: str, ntx_status: dict | None) -> None:
         """Update ntx ingest status for a single node."""
-        if ntx_status is None:
-            return
-        self._ntx_statuses[node_id] = ntx_status
+        freshness = self._ntx_freshness.setdefault(
+            node_id, SourceFreshness(NTX_STALE_AFTER, NTX_EXPIRED_AFTER),
+        )
+        freshness.attempted(self._clock(), ntx_status is not None)
+        if ntx_status is not None:
+            self._ntx_statuses[node_id] = ntx_status
 
     @property
     def ntx_statuses(self) -> list[dict]:
         """All accumulated ntx /status responses."""
-        return list(self._ntx_statuses.values())
+        now = self._clock()
+        return [
+            {**value, "_freshness": self._ntx_freshness[node_id].state(now)}
+            for node_id, value in self._ntx_statuses.items()
+            if self._ntx_freshness[node_id].state(now) != "expired"
+        ]
+
+    def source_freshness(self, source: str) -> SourceFreshness:
+        """Return freshness metadata for a global source."""
+        return self._sources[source]
+
+    def source_state(self, source: str) -> str:
+        return self._sources[source].state(self._clock())
+
+    def source_age(self, source: str) -> float | None:
+        return self._sources[source].age(self._clock())
+
+    def status_age(self, node_id: str) -> float | None:
+        snapshot = self._nodes.get(node_id)
+        return None if snapshot is None else snapshot.status_freshness.age(self._clock())
+
+    def observational_state(self, source: str) -> str:
+        """Return the worst per-endpoint state for a local-only view."""
+        now = self._clock()
+        if source == "traffic":
+            values = [node.traffic_freshness for node in self._nodes.values()]
+        elif source == "heartbeats":
+            values = list(self._heartbeat_freshness.values())
+        elif source == "ntx":
+            values = list(self._ntx_freshness.values())
+        else:
+            raise KeyError(source)
+        if not values:
+            return "missing"
+        states = {value.state(now) for value in values}
+        for state in ("expired", "missing", "stale", "fresh"):
+            if state in states:
+                return state
+        return "missing"
 
 
 async def fetch_heartbeat_matrix(
     peer_hosts: list[str], http_port: int, session: aiohttp.ClientSession,
-) -> dict[str, dict[str, float]]:
+) -> HeartbeatPollResult:
     """Fetch /nodes from ALL peers to build heartbeat age matrix.
     
     Returns: {observer_node: {observed_node: heartbeat_age_seconds}}
     """
     matrix: dict[str, dict[str, float]] = {}
+    succeeded_by_host: dict[str, bool] = {}
     
     # Query /nodes from each peer concurrently
     tasks = []
@@ -576,6 +760,7 @@ async def fetch_heartbeat_matrix(
     
     # Build matrix from results
     for host, result in zip(peer_hosts, results):
+        succeeded_by_host[host] = isinstance(result, list)
         if isinstance(result, list) and result:
             # result is the nodes list from this peer's perspective
             observer = host  # This peer is observing others
@@ -587,7 +772,7 @@ async def fetch_heartbeat_matrix(
                 if observed:
                     matrix[observer][observed] = hb_age
 
-    return matrix
+    return HeartbeatPollResult(matrix, succeeded_by_host)
 
 
 # ---------------------------------------------------------------------------

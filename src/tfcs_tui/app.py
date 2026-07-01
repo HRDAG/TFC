@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
+import time
 from pathlib import Path
 
 from textual.app import App, ComposeResult
@@ -26,16 +27,19 @@ from textual.widgets import Footer, Header, Static, TabbedContent, TabPane
 from tfcs_tui.data import (
     DEFAULT_CONFIG,
     NodeDataStore,
+    fetch_nodes,
     fetch_node_all,
-    fetch_ntx_status,
+    fetch_replication,
     load_config,
     load_tailscale_ip_map,
     load_velocity_history,
     poll_cluster,
+    poll_ntx_statuses,
     poll_traffic_matrix,
     save_snapshot,
     short,
 )
+from tfcs_tui.risk import classify_risk
 from tfcs_tui.widgets import (
     ClusterOverview,
     HeartbeatMatrix,
@@ -48,6 +52,7 @@ from tfcs_tui.widgets import (
     OrgsTable,
     ReplicationChart,
     ReplicationVelocity,
+    RiskBanner,
     SourceUtilization,
     TrafficHeatmap,
     TransfersTable,
@@ -105,6 +110,9 @@ class TfcsDashboard(App):
         padding: 0 1;
         height: 1;
     }
+    .source-stale {
+        opacity: 60%;
+    }
     """
 
     def __init__(
@@ -118,13 +126,16 @@ class TfcsDashboard(App):
         retired_peers: list[str] | None = None,
         backoff_failures: int = 3,
         evict_failures: int = 10,
+        clock=None,
     ) -> None:
         super().__init__()
         # Bootstrap hosts come from config and are never evicted. Discovered
         # hosts are added via /nodes responses and may be backed off / evicted
         # when they stop responding. _peer_hosts is the live union (property).
-        self._bootstrap_hosts: list[str] = list(peer_hosts)  # preserve config order
         self._retired_hosts: set[str] = set(retired_peers or ())
+        self._bootstrap_hosts: list[str] = [
+            host for host in peer_hosts if host not in self._retired_hosts
+        ]  # preserve config order
         self._discovered_hosts: set[str] = set()
         self._evicted_hosts: set[str] = set()
         self._host_failures: dict[str, int] = {}
@@ -136,11 +147,11 @@ class TfcsDashboard(App):
         self._target_copies = target_copies
         self._refresh_seconds = refresh_seconds
         self._ntx_hosts_config = ntx_hosts
-        self._store = NodeDataStore()
+        self._store = NodeDataStore(clock or time.monotonic)
 
         # Rolling updates (one node at a time)
         self._current_node_index = 0
-        self._current_ntx_index = 0
+        self._last_global_poll = float("-inf")
 
         self._ip_map = load_tailscale_ip_map(self._peer_hosts)
         self._velocity_history = load_velocity_history()
@@ -203,6 +214,7 @@ class TfcsDashboard(App):
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         yield Static("", id="title-bar")
+        yield RiskBanner(id="risk-banner")
         with TabbedContent(initial="tab-replication"):
             with TabPane("Replication", id="tab-replication"):
                 yield Static("How many copies of each commit exist across the cluster, and how fast new copies are being made.", classes="tab-desc")
@@ -238,21 +250,26 @@ class TfcsDashboard(App):
     def on_mount(self) -> None:
         self.action_refresh()
         self.set_interval(1.0, self._poll_next_node)
-        self.set_interval(120.0, self._poll_next_ntx_node)
+        self.set_interval(1.0, self._refresh_for_clock)
+        self.set_interval(120.0, self._poll_ntx_nodes)
+
+    def _refresh_for_clock(self) -> None:
+        """Render freshness transitions even when no network worker completes."""
+        self.post_message(NodeUpdated(updated_node="clock"))
 
     def action_refresh(self) -> None:
         """Initial refresh on startup (or manual refresh with 'r' key)."""
         async def do_full_refresh():
-            statuses, node_status, heartbeat_age, replication, velocity, site_dist, sole_holders, by_org = await poll_cluster(
+            result = await poll_cluster(
                 self._peer_hosts, self._http_port, self._target_copies
             )
 
             node_status = {
-                nid: status for nid, status in node_status.items()
+                nid: status for nid, status in result.node_status.items()
                 if nid not in self._retired_hosts
             }
             heartbeat_age = {
-                nid: age for nid, age in heartbeat_age.items()
+                nid: age for nid, age in result.heartbeat_age.items()
                 if nid not in self._retired_hosts
             }
 
@@ -261,39 +278,53 @@ class TfcsDashboard(App):
                 [{"node_id": nid} for nid in node_status]
             )
 
-            traffic_reports = await poll_traffic_matrix(
+            traffic_results = await poll_traffic_matrix(
                 self._peer_hosts, self._http_port
             )
 
             # Populate datastore
-            for status in statuses:
-                node_id = status.get("node_id")
-                if node_id:
-                    self._store.update_node(node_id, status, None)
+            for host, status in result.status_by_host.items():
+                node_id = status.get("node_id", host) if status is not None else host
+                self._store.update_node(
+                    node_id, status, None, traffic_attempted=False,
+                )
 
-            for traffic in traffic_reports:
-                node_id = traffic.get("node_id")
-                if node_id:
-                    self._store.update_node(node_id, None, traffic)
+            for host, traffic in traffic_results:
+                node_id = traffic.get("node_id", host) if traffic is not None else host
+                self._store.update_node(
+                    node_id, None, traffic, status_attempted=False,
+                )
 
-            self._store.update_global(node_status, heartbeat_age, replication,
-                                      velocity=velocity,
-                                      site_distribution=site_dist,
-                                      cluster_sole_holders=sole_holders,
-                                      by_org=by_org)
+            import aiohttp
+            from tfcs_tui.data import fetch_heartbeat_matrix
+            async with aiohttp.ClientSession() as heartbeat_session:
+                heartbeats = await fetch_heartbeat_matrix(
+                    self._peer_hosts, self._http_port, heartbeat_session,
+                )
+
+            self._store.update_global(
+                node_status, heartbeat_age, result.replication,
+                heartbeat_matrix=heartbeats.matrix,
+                velocity=result.velocity,
+                site_distribution=result.site_distribution,
+                cluster_sole_holders=result.sole_holders,
+                by_org=result.by_org,
+                nodes_succeeded=result.nodes_succeeded,
+                replication_succeeded=result.replication_succeeded,
+                heartbeat_outcomes=heartbeats.succeeded_by_host,
+            )
+
+            self.post_message(NodeUpdated(updated_node="refresh"))
 
             # Burst-fetch ntx from active nodes (now that statuses are populated)
-            import aiohttp
             ntx_hosts = self._get_ntx_hosts()
             if ntx_hosts:
                 async with aiohttp.ClientSession() as ntx_session:
-                    tasks = [fetch_ntx_status(ntx_session, h, self._ntx_port) for h in ntx_hosts]
-                    results = await asyncio.gather(*tasks)
-                    for ntx_host, ntx_data in zip(ntx_hosts, results):
-                        if ntx_data:
-                            self._store.update_ntx(short(ntx_host), ntx_data)
+                    results = await poll_ntx_statuses(ntx_session, ntx_hosts, self._ntx_port)
+                    for ntx_host, ntx_data in results:
+                        self._store.update_ntx(short(ntx_host), ntx_data)
 
-            self.post_message(NodeUpdated(updated_node="refresh"))
+            self.post_message(NodeUpdated(updated_node="ntx"))
 
         self.run_worker(do_full_refresh, exclusive=False)
 
@@ -314,22 +345,19 @@ class TfcsDashboard(App):
             if s.get("node_class") in self._INGEST_CLASSES
         ]
 
-    def _poll_next_ntx_node(self) -> None:
-        """Poll next ntx ingest node (120s interval, 90s timeout)."""
+    def _poll_ntx_nodes(self) -> None:
+        """Poll all ntx ingest nodes concurrently every 120 seconds."""
         ntx_hosts = self._get_ntx_hosts()
         if not ntx_hosts:
             return
 
-        host = ntx_hosts[self._current_ntx_index % len(ntx_hosts)]
-        self._current_ntx_index = (self._current_ntx_index + 1) % len(ntx_hosts)
-
         async def do_ntx_poll():
             import aiohttp
             async with aiohttp.ClientSession() as session:
-                ntx_data = await fetch_ntx_status(session, host, self._ntx_port)
-                if ntx_data:
+                results = await poll_ntx_statuses(session, ntx_hosts, self._ntx_port)
+                for host, ntx_data in results:
                     self._store.update_ntx(short(host), ntx_data)
-                    self.post_message(NodeUpdated(updated_node=host))
+                self.post_message(NodeUpdated(updated_node="ntx"))
 
         self.run_worker(do_ntx_poll, exclusive=False)
 
@@ -355,7 +383,10 @@ class TfcsDashboard(App):
         if host is None:
             return  # every host in backoff — nothing to poll this tick
 
-        include_global = host == peers[0]  # global fetch piggybacks on bootstrap[0]
+        now = time.monotonic()
+        include_global = now - self._last_global_poll >= self._refresh_seconds
+        if include_global:
+            self._last_global_poll = now
 
         async def do_poll():
             await self._do_poll(host, include_global)
@@ -382,19 +413,45 @@ class TfcsDashboard(App):
                 node_id = traffic.get("node_id")
 
             if not node_id:
-                return
+                node_id = host
 
             # Update datastore
             self._store.update_node(node_id, status, traffic)
 
-            if include_global and nodes_list is not None and replication is not None:
+            if include_global:
+                # A global endpoint may be unavailable on the selected rolling
+                # host while remaining available elsewhere. Fall back across
+                # the other peers concurrently, preserving empty successes.
+                others = [peer for peer in self._peer_hosts if peer != host]
+                if nodes_list is None and others:
+                    node_results = await asyncio.gather(*(
+                        fetch_nodes(session, peer, self._http_port)
+                        for peer in others
+                    ))
+                    nodes_list = next(
+                        (value for value in node_results if value is not None), None,
+                    )
+                if replication is None and others:
+                    replication_results = await asyncio.gather(*(
+                        fetch_replication(
+                            session, peer, self._http_port, self._target_copies,
+                        )
+                        for peer in others
+                    ))
+                    repl_result = next(
+                        (value for value in replication_results if value is not None),
+                        None,
+                    )
+                    if repl_result is not None:
+                        replication, velocity, site_dist, sole_holders, by_org = repl_result
+
                 # Promote /nodes-known FQDNs to discovered before anything reads _peer_hosts
-                self._merge_discovered_peers(nodes_list)
+                self._merge_discovered_peers(nodes_list or [])
 
                 # Parse nodes_list into node_status and heartbeat_age dicts
                 node_status = {}
                 heartbeat_age = {}
-                for node_info in nodes_list:
+                for node_info in nodes_list or []:
                     nid = node_info.get("node_id")
                     if nid and nid not in self._retired_hosts:
                         node_status[nid] = node_info.get("status", "unknown")
@@ -402,13 +459,18 @@ class TfcsDashboard(App):
 
                 # Fetch heartbeat matrix from all peers
                 from tfcs_tui.data import fetch_heartbeat_matrix
-                hb_matrix = await fetch_heartbeat_matrix(self._peer_hosts, self._http_port, session)
+                heartbeats = await fetch_heartbeat_matrix(
+                    self._peer_hosts, self._http_port, session,
+                )
 
-                self._store.update_global(node_status, heartbeat_age, replication, hb_matrix,
+                self._store.update_global(node_status, heartbeat_age, replication or {}, heartbeats.matrix,
                                           velocity=velocity,
                                           site_distribution=site_dist,
                                           cluster_sole_holders=sole_holders,
-                                          by_org=by_org)
+                                          by_org=by_org,
+                                          nodes_succeeded=nodes_list is not None,
+                                          replication_succeeded=replication is not None,
+                                          heartbeat_outcomes=heartbeats.succeeded_by_host)
 
             self.post_message(NodeUpdated(updated_node=node_id))
 
@@ -416,6 +478,12 @@ class TfcsDashboard(App):
         """Update ALL widgets from the datastore."""
         import time
         store = self._store
+
+        replication_stale = store.source_state("replication") in {"stale", "expired"}
+        for widget_type in (ReplicationChart, ClusterOverview, OrgsTable, OrgNodeTable):
+            self.query_one(widget_type).set_class(replication_stale, "source-stale")
+
+        self.query_one(RiskBanner).refresh_data(classify_risk(store, self._target_copies))
 
         # --- Replication tab (Tab 1) ---
         self.query_one(ReplicationChart).refresh_data(
@@ -480,6 +548,12 @@ class TfcsDashboard(App):
         traffic_hm = self.query_one(TrafficHeatmap)
         latency_hm = self.query_one(LatencyHeatmap)
         heartbeat_hm = self.query_one(HeartbeatMatrix)
+        traffic_stale = store.observational_state("traffic") != "fresh"
+        traffic_hm.set_class(traffic_stale, "source-stale")
+        latency_hm.set_class(traffic_stale, "source-stale")
+        heartbeat_hm.set_class(
+            store.observational_state("heartbeats") != "fresh", "source-stale",
+        )
         traffic_hm.set_node_names(peers)
         traffic_hm.set_ip_map(self._ip_map)
         latency_hm.set_node_names(peers)
@@ -491,9 +565,18 @@ class TfcsDashboard(App):
 
         # --- Ingest tab (Tab 7) ---
         ntx = store.ntx_statuses
-        self.query_one(IngestOverview).refresh_data(ntx)
-        self.query_one(IngestNodeTable).refresh_data(ntx, store.statuses)
-        self.query_one(IngestPipeline).refresh_data(ntx)
+        ingest_widgets = (
+            self.query_one(IngestOverview),
+            self.query_one(IngestNodeTable),
+            self.query_one(IngestPipeline),
+        )
+        for widget in ingest_widgets:
+            widget.set_class(
+                store.observational_state("ntx") != "fresh", "source-stale",
+            )
+        ingest_widgets[0].refresh_data(ntx)
+        ingest_widgets[1].refresh_data(ntx, store.statuses)
+        ingest_widgets[2].refresh_data(ntx)
 
         # Update title bar
         self._update_title_bar()
@@ -506,7 +589,7 @@ class TfcsDashboard(App):
         if active_tab == "tab-replication":
             title_bar.update(" tfcs cluster dashboard")
         elif active_tab == "tab-nodes":
-            n_nodes = len(self._store.statuses)
+            n_nodes = len(set(self._peer_hosts) | set(self._store.node_status))
             n_transfers = sum(len(s.get("claims", [])) for s in self._store.statuses)
             title_bar.update(f" tfcs nodes    {n_nodes} nodes, {n_transfers} active transfers")
         elif active_tab == "tab-orgs":
@@ -514,22 +597,26 @@ class TfcsDashboard(App):
             title_bar.update(f" tfcs orgs    {n_orgs} organizations")
         elif active_tab == "tab-traffic":
             n_reporting = len(self._store.traffic_reports)
+            freshness = self._store.observational_state("traffic")
             title_bar.update(
-                f" tfcs traffic heatmap    {n_reporting}/{len(self._peer_hosts)} nodes reporting"
+                f" tfcs traffic heatmap    {n_reporting}/{len(self._peer_hosts)} nodes reporting [{freshness}]"
             )
         elif active_tab == "tab-latency":
             n_reporting = len(self._store.traffic_reports)
+            freshness = self._store.observational_state("traffic")
             title_bar.update(
-                f" tfcs latency heatmap    {n_reporting}/{len(self._peer_hosts)} nodes reporting"
+                f" tfcs latency heatmap    {n_reporting}/{len(self._peer_hosts)} nodes reporting [{freshness}]"
             )
         elif active_tab == "tab-heartbeats":
             n_reporting = len(self._store.heartbeat_matrix)
+            freshness = self._store.observational_state("heartbeats")
             title_bar.update(
-                f" tfcs heartbeat matrix    {n_reporting}/{len(self._peer_hosts)} nodes reporting"
+                f" tfcs heartbeat matrix    {n_reporting}/{len(self._peer_hosts)} nodes reporting [{freshness}]"
             )
         elif active_tab == "tab-ingest":
             n_ntx = len(self._store.ntx_statuses)
-            title_bar.update(f" ntx ingest pipeline    {n_ntx} nodes reporting")
+            freshness = self._store.observational_state("ntx")
+            title_bar.update(f" ntx ingest pipeline    {n_ntx} nodes reporting [{freshness}]")
 
     def action_tab_replication(self) -> None:
         """Switch to replication tab."""

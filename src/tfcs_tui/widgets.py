@@ -13,6 +13,29 @@ import humanize
 from rich.text import Text
 from textual.widgets import DataTable, Static
 
+from tfcs_tui.risk import Risk
+
+
+class RiskBanner(Static):
+    """Persistent highest-severity cluster safety signal."""
+
+    DEFAULT_CSS = """
+    RiskBanner {
+        height: auto;
+        max-height: 2;
+        padding: 0 1;
+        text-style: bold;
+    }
+    RiskBanner.critical { background: red; color: white; }
+    RiskBanner.unknown { background: purple; color: white; }
+    RiskBanner.warn { background: yellow; color: black; }
+    RiskBanner.ok { background: green; color: black; }
+    """
+
+    def refresh_data(self, risk: Risk) -> None:
+        self.set_classes(risk.severity.lower())
+        self.update(f"{risk.severity}: {risk.message}")
+
 from tfcs_tui.data import compute_total_copies, fmt_bytes, fmt_uptime, short
 
 
@@ -155,7 +178,7 @@ class ReplicationChart(Static):
             site_styles = {0: "bold red", 1: "red", 2: "yellow", 3: "green"}
 
             lines.append(Text(""))
-            lines.append(Text("  site copies (target: ≥2 sites)", style="bold"))
+            lines.append(Text("  commit site distribution (target: ≥2 sites)", style="bold"))
             lines.extend(self._render_histogram(
                 site_bins, site_labels, site_styles, self._site_bin_changes, now,
                 alarm_bins={0, 1},
@@ -241,7 +264,10 @@ class ClusterOverview(Static):
             if cpm >= 0.1:
                 vel_text.append(f"+{cpm:.1f} copies/min", style="green")
             else:
-                vel_text.append("STALLED", style="yellow")
+                vel_text.append(f"{cpm:.1f} copies/min", style="yellow")
+            bytes_per_sec = velocity_data.get("bytes_per_min", 0) / 60
+            bandwidth = humanize.naturalsize(bytes_per_sec, binary=False, format="%.1f") + "/s"
+            vel_text.append(f"  {bandwidth}", style="green" if bytes_per_sec > 0 else "dim")
             if eta is not None:
                 vel_text.append(f"  ETA: ~{eta:.0f} min ({eta/60:.1f} hr)", style="yellow")
             lines.append(vel_text)
@@ -282,7 +308,7 @@ class ReplicationVelocity(Static):
     def refresh_data(self, velocity: dict | None) -> None:
         """Display server-computed velocity data."""
         if velocity is None:
-            self.update(Text("(waiting for velocity data...)", style="dim"))
+            self.update(Text("replication activity unavailable", style="dim"))
             return
 
         cpm = velocity.get("copies_per_min", 0)
@@ -296,11 +322,11 @@ class ReplicationVelocity(Static):
         if cpm >= 0.1:
             vel_text.append(f"+{cpm:.1f} copies/min", style="green")
         else:
-            vel_text.append("STALLED", style="yellow")
+            vel_text.append(f"{cpm:.1f} copies/min — no material activity", style="yellow")
         vel_text.append(f"  ({new_copies} new in {window_min}m window)", style="dim")
         if bytes_per_min > 0:
             bw_str = humanize.naturalsize(bytes_per_min / 60, binary=False, format="%.1f") + "/s"
-            vel_text.append(f"  ~{bw_str}", style="dim")
+            vel_text.append(f"  {bw_str}", style="green")
         lines.append(vel_text)
 
         if by_source:
@@ -395,6 +421,7 @@ class NodesTable(DataTable):
         self.add_column("Site", width=9, key="site")
         self.add_column("Class", width=7, key="class")
         self.add_column("Status", width=7, key="status")
+        self.add_column("Seen", width=6, key="seen")
         self.add_column("HB", width=4, key="hb")
         self.add_column("Uptime", width=9, key="uptime")
         self.add_column("tfcs-Ver", width=9, key="ver")
@@ -411,6 +438,7 @@ class NodesTable(DataTable):
 
         # Right-align numeric column content
         self.columns["hb"].content_align = ("right", "middle")
+        self.columns["seen"].content_align = ("right", "middle")
         self.columns["seq"].content_align = ("right", "middle")
         self.columns["store"].content_align = ("right", "middle")
         self.columns["free"].content_align = ("right", "middle")
@@ -459,6 +487,7 @@ class NodesTable(DataTable):
                     Text("?", style="dim"),
                     Text("?", style="dim"),
                     Text(status, style=status_style),
+                    Text("--", style="dim", justify="right"),
                     Text(hb_str, justify="right"),
                     Text("--", style="dim"),
                     Text("?", style="dim"),
@@ -482,6 +511,11 @@ class NodesTable(DataTable):
             node_cell = Text(short(nid), style="red bold" if sole_count > 0 else "")
 
             ver = s.get("version", "?")
+            seen_age = s.get("_seen_age")
+            seen = "--" if seen_age is None else f"{seen_age:.0f}s"
+            stale_style = "dim" if s.get("_freshness") in {"stale", "expired"} else ""
+            if stale_style:
+                node_cell.stylize(stale_style)
             ver_cell = (
                 Text(ver, style="yellow")
                 if cluster_max_version and ver not in ("?", cluster_max_version)
@@ -493,6 +527,7 @@ class NodesTable(DataTable):
                 s.get("cluster", "?"),
                 s.get("node_class", "?"),
                 Text(status, style=status_style),
+                Text(seen, style=stale_style, justify="right"),
                 Text(hb_str, justify="right"),
                 uptime,
                 ver_cell,
