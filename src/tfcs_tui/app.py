@@ -115,6 +115,7 @@ class TfcsDashboard(App):
         target_copies: int = 3,
         refresh_seconds: int = 10,
         ntx_hosts: list[str] | None = None,
+        retired_peers: list[str] | None = None,
         backoff_failures: int = 3,
         evict_failures: int = 10,
     ) -> None:
@@ -123,6 +124,7 @@ class TfcsDashboard(App):
         # hosts are added via /nodes responses and may be backed off / evicted
         # when they stop responding. _peer_hosts is the live union (property).
         self._bootstrap_hosts: list[str] = list(peer_hosts)  # preserve config order
+        self._retired_hosts: set[str] = set(retired_peers or ())
         self._discovered_hosts: set[str] = set()
         self._evicted_hosts: set[str] = set()
         self._host_failures: dict[str, int] = {}
@@ -183,7 +185,12 @@ class TfcsDashboard(App):
         new_hosts: set[str] = set()
         for n in nodes_list:
             nid = n.get("node_id")
-            if not nid or nid in bootstrap_set or nid in self._evicted_hosts:
+            if (
+                not nid
+                or nid in bootstrap_set
+                or nid in self._evicted_hosts
+                or nid in self._retired_hosts
+            ):
                 continue
             if nid not in self._discovered_hosts:
                 new_hosts.add(nid)
@@ -239,6 +246,15 @@ class TfcsDashboard(App):
             statuses, node_status, heartbeat_age, replication, velocity, site_dist, sole_holders, by_org = await poll_cluster(
                 self._peer_hosts, self._http_port, self._target_copies
             )
+
+            node_status = {
+                nid: status for nid, status in node_status.items()
+                if nid not in self._retired_hosts
+            }
+            heartbeat_age = {
+                nid: age for nid, age in heartbeat_age.items()
+                if nid not in self._retired_hosts
+            }
 
             # Promote any /nodes-known FQDNs we don't already have to discovered.
             self._merge_discovered_peers(
@@ -380,7 +396,7 @@ class TfcsDashboard(App):
                 heartbeat_age = {}
                 for node_info in nodes_list:
                     nid = node_info.get("node_id")
-                    if nid:
+                    if nid and nid not in self._retired_hosts:
                         node_status[nid] = node_info.get("status", "unknown")
                         heartbeat_age[nid] = node_info.get("heartbeat_age_seconds") or 0.0
 
@@ -448,7 +464,9 @@ class TfcsDashboard(App):
         self.query_one(VelocityChart).refresh_data(self._velocity_history)
 
         # --- Nodes tab (Tab 2) ---
-        self.query_one(NodesTable).refresh_data(store.statuses, store.node_status, store.heartbeat_age)
+        self.query_one(NodesTable).refresh_data(
+            store.statuses, store.node_status, store.heartbeat_age, self._peer_hosts,
+        )
         self.query_one(SourceUtilization).refresh_data(store.statuses)
         self.query_one(TransfersTable).refresh_data(store.statuses)
 
@@ -584,6 +602,7 @@ def main() -> None:
         target_copies=cfg["target_copies"],
         refresh_seconds=cfg["refresh_seconds"],
         ntx_hosts=cfg["ntx_hosts"],
+        retired_peers=cfg["retired_peers"],
         backoff_failures=cfg["backoff_failures"],
         evict_failures=cfg["evict_failures"],
     )

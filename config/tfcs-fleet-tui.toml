@@ -64,12 +64,6 @@ tfcs_status = "chll.hrdag.net"
 mounts = { root = "/home", data = "/storage" }
 sensors = { nic = false }
 
-[hosts.ipfs1]
-instance = "ipfs1.hrdag.net:9100"
-tfcs_status = "ipfs1.hrdag.net"
-mounts = { root = "/", data = "/" }
-sensors = { hdd = false, nic = false }
-
 [hosts.pihost]
 instance = "pihost.hrdag.net:9100"
 tfcs_status = "pihost.hrdag.net"
@@ -122,3 +116,9 @@ instance = "dwight.hrdag.net:9100"
 tfcs_status = "dwight.hrdag.net"
 mounts = { root = "/", data = "/storage" }
 sensors = { nic = false }
+
+[hosts.lilpig]
+instance = "lilpig.hrdag.net:9100"
+tfcs_status = "lilpig.hrdag.net"
+mounts = { root = "/", data = "/mnt/tfcs-store" }
+sensors = { hdd = false, nic = false }

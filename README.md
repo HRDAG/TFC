@@ -31,7 +31,7 @@ Bitcoin block.
 │  │  Storage nodes                 │      ┌──────────────────────────┐   │
 │  │                                │      │  TechFutures (coloc.)    │   │
 │  │  snowball  meerkat             │      │  kj (GPU)  ben (storage) │   │
-│  │  pihost                        │      └──────────────────────────┘   │
+│  │  pihost  lilpig                │      └──────────────────────────┘   │
 │  │                                │                                      │
 │  └────────────────────────────────┘                                      │
 │  ┌────────────────────────────────┐                                      │
@@ -141,7 +141,7 @@ Four tools give four different views of the same system:
 │  chll    │   │ snowball  │    │ S3       │   │ decentralized    │
 │  ben     │   │ meerkat   │    │ (planned)│   │ permanent        │
 │          │   │ pihost    │    │          │   │ storage          │
-│          │   │           │    │          │   │                  │
+│          │   │ lilpig    │    │          │   │                  │
 └──────────┘   └───────────┘    └──────────┘   └──────────────────┘
 ```
 

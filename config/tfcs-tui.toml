@@ -11,16 +11,20 @@
 bootstrap_peers = [
     "scott.hrdag.net:8098",
     "chll.hrdag.net:8098",
-    "ipfs1.hrdag.net:8098",
     "pihost.hrdag.net:8098",
     "meerkat.hrdag.net:8098",
     "snowball.hrdag.net:8098",
     "lizo.hrdag.net:8098",
+    "lilpig.hrdag.net:8098",
     "ben.hrdag.net:8098",
     "ida.hrdag.net:8098",
     "ant.hrdag.net:8098",
     "dwight.hrdag.net:8098",
 ]
+
+# Nodes permanently removed from service. Ignore stale references returned by
+# peers' /nodes endpoints so auto-discovery cannot add them back to the TUI.
+retired_peers = ["ipfs1.hrdag.net"]
 
 http_port = 8099
 ntx_port = 9401

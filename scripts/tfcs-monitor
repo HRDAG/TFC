@@ -49,9 +49,9 @@ ANCHORS = ["ida.hrdag.net", "ant.hrdag.net", "lizo.hrdag.net", "dwight.hrdag.net
 # Self-pull doesn't exist; we filter the anchor out per-source below.
 ALL_NODES = [
     "scott.hrdag.net", "ben.hrdag.net", "chll.hrdag.net",
-    "ida.hrdag.net", "ant.hrdag.net", "ipfs1.hrdag.net",
+    "ida.hrdag.net", "ant.hrdag.net",
     "lizo.hrdag.net", "meerkat.hrdag.net", "pihost.hrdag.net",
-    "snowball.hrdag.net", "dwight.hrdag.net",
+    "snowball.hrdag.net", "dwight.hrdag.net", "lilpig.hrdag.net",
 ]
 
 # Org → anchor (originating node). Keys drive the per-org holder

@@ -419,7 +419,7 @@ class NodesTable(DataTable):
 
     def refresh_data(
         self, statuses: list[dict], node_status: dict[str, str],
-        heartbeat_age: dict[str, float],
+        heartbeat_age: dict[str, float], peer_hosts: list[str] | None = None,
     ) -> None:
         self.clear()
 
@@ -431,11 +431,12 @@ class NodesTable(DataTable):
                 cluster_max_version = us.get("cluster_max_version")
                 break
 
-        # Build union of all node_ids: those we polled /status from, plus
-        # those known only via /nodes (discovered but unreachable by us yet).
+        # Build union of all node_ids: configured/discovered peers, those we
+        # polled /status from, and those known only via /nodes. Including the
+        # live peer list ensures a newly configured offline node still renders.
         status_by_nid: dict[str, dict] = {s["node_id"]: s for s in statuses}
         all_nids = sorted(
-            set(status_by_nid) | set(node_status),
+            set(status_by_nid) | set(node_status) | set(peer_hosts or ()),
             key=lambda nid: (0 if nid.startswith("scott.") else 1, nid),
         )
 

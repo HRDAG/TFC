@@ -219,6 +219,7 @@ def load_config(config_path: Path) -> dict:
 
     return {
         "peer_hosts": [bp.rsplit(":", 1)[0] for bp in peers],
+        "retired_peers": raw.get("retired_peers", []),
         "http_port": raw.get("http_port", 8099),
         "ntx_port": raw.get("ntx_port", 9401),
         "target_copies": raw.get("target_copies", 3),
