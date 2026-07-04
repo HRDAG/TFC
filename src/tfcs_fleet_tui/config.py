@@ -41,9 +41,11 @@ class Host:
 
     name: str
     instance: str
+    kind: str = "tfcs"
     tfcs_status: str | None = None
     mounts: dict[str, str] = field(default_factory=dict)
     sensors: dict[str, bool] = field(default_factory=dict)
+    vm_instances: tuple[str, ...] = ()
     thresholds: dict[str, Thresholds] = field(default_factory=dict)
 
     def has(self, sensor: str) -> bool:
@@ -77,9 +79,11 @@ def _parse_host(name: str, raw: dict) -> Host:
     return Host(
         name=name,
         instance=str(raw["instance"]),
+        kind=str(raw.get("kind", "tfcs")),
         tfcs_status=tfcs_status,
         mounts=dict(raw.get("mounts", {})),
         sensors=sensors,
+        vm_instances=tuple(str(v) for v in raw.get("vm_instances", ())),
     )
 
 
@@ -115,9 +119,11 @@ def load_config() -> FleetConfig:
             host = Host(
                 name=host.name,
                 instance=host.instance,
+                kind=host.kind,
                 tfcs_status=host.tfcs_status,
                 mounts=host.mounts,
                 sensors=host.sensors,
+                vm_instances=host.vm_instances,
                 thresholds=per_host_thresholds[name],
             )
         hosts[name] = host

@@ -15,7 +15,7 @@ from textual.widgets import Static, TabbedContent
 from tfcs_fleet_tui.config import FleetConfig
 from tfcs_fleet_tui.widgets import FleetTable
 from tfcs_tui.app import NodeUpdated, TfcsDashboard
-from tfcs_tui.widgets import NodesTable, RiskBanner
+from tfcs_tui.widgets import LatencyHeatmap, NodesTable, RiskBanner, TrafficHeatmap
 
 
 class Clock:
@@ -70,6 +70,24 @@ class DashboardPilotTests(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             self.assertIn("WARN:", str(banner.render()))
             self.assertIn("stale", str(banner.render()))
+
+    async def test_movement_mode_toggle_switches_heatmaps(self) -> None:
+        app = PilotDashboard(["one.example"])
+        async with app.run_test():
+            app.query_one(TabbedContent).active = "tab-movement"
+            traffic = app.query_one(TrafficHeatmap)
+            latency = app.query_one(LatencyHeatmap)
+
+            self.assertFalse(traffic.has_class("hidden"))
+            self.assertTrue(latency.has_class("hidden"))
+
+            app.action_toggle_movement_mode()
+            self.assertTrue(traffic.has_class("hidden"))
+            self.assertFalse(latency.has_class("hidden"))
+
+            app._update_title_bar()
+            title = app.query_one("#title-bar", Static)
+            self.assertIn("latency", str(title.render()))
 
     async def test_fleet_tab_mounts_when_configured(self) -> None:
         fleet_config = FleetConfig(

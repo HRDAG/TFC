@@ -184,9 +184,8 @@ this directory, and run this.
 uv run tfcs-tui -c config/tfcs-tui.toml
 ```
 
-The dashboard shows replication progress, node health, per-org breakdown,
-traffic heatmaps, heartbeat freshness, ingest status, and fleet health across
-all cluster nodes.
+The dashboard shows replication progress, tfcs node state, per-org breakdown,
+movement, ingest status, fleet health, and debug matrices across the cluster.
 
 ---
 
@@ -195,7 +194,7 @@ all cluster nodes.
 Host-level fleet health is now also available as the `Fleet` tab in
 `tfcs-tui`: one row per machine, one column per signal (last-scrape, up, load,
 CPU / HDD / SSD / NVMe / NIC temperatures, root and data filesystem fullness,
-and the count of active tfcs pulls).
+the count of active tfcs pulls, and compact notes for hypervisor/VM visibility).
 
 The focused fleet-only TUI is still available:
 

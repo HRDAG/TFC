@@ -74,6 +74,7 @@ class FleetDashboard(App):
 
     async def _refresh(self) -> None:
         statuses = await self._source.refresh_prometheus()
+        await self._source.refresh_vms()
 
         self._render_snapshot(self._build_snapshot(
             prom_status_line=self._source.status_line(statuses, "checking"),

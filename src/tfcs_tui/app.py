@@ -89,11 +89,11 @@ class TfcsDashboard(App):
         Binding("1", "tab_replication", "Replication", show=False),
         Binding("2", "tab_nodes", "Nodes", show=False),
         Binding("3", "tab_orgs", "Orgs", show=False),
-        Binding("4", "tab_traffic", "Traffic", show=False),
-        Binding("5", "tab_latency", "Latency", show=False),
-        Binding("6", "tab_heartbeats", "Heartbeats", show=False),
-        Binding("7", "tab_ingest", "Ingest", show=False),
-        Binding("8", "tab_fleet", "Fleet", show=False),
+        Binding("4", "tab_movement", "Movement", show=False),
+        Binding("5", "tab_ingest", "Ingest", show=False),
+        Binding("6", "tab_fleet", "Fleet", show=False),
+        Binding("7", "tab_debug", "Debug", show=False),
+        Binding("m", "toggle_movement_mode", "Movement mode"),
         Binding("j", "scroll_down", "Down", show=False),
         Binding("k", "scroll_up", "Up", show=False),
     ]
@@ -116,6 +116,9 @@ class TfcsDashboard(App):
     }
     .source-stale {
         opacity: 60%;
+    }
+    .hidden {
+        display: none;
     }
     """
 
@@ -151,6 +154,7 @@ class TfcsDashboard(App):
             FleetDataSource(fleet_config) if fleet_config is not None else None
         )
         self._fleet_status_line = ""
+        self._movement_mode = "bandwidth"
 
         self._http_port = http_port
         self._ntx_port = ntx_port
@@ -227,41 +231,33 @@ class TfcsDashboard(App):
         yield RiskBanner(id="risk-banner")
         with TabbedContent(initial="tab-replication"):
             with TabPane("Replication", id="tab-replication"):
-                yield Static("How many copies of each commit exist across the cluster, and how fast new copies are being made.", classes="tab-desc")
                 yield ClusterOverview(self._target_copies)
                 yield ReplicationChart()
                 yield ReplicationVelocity()
                 yield VelocityChart()
             with TabPane("Nodes", id="tab-nodes"):
-                yield Static("Per-node health, capacity, and active data transfers.", classes="tab-desc")
                 yield NodesTable()
-                yield SourceUtilization()
-                yield TransfersTable()
             with TabPane("Orgs", id="tab-orgs"):
-                yield Static("Replication and site distribution broken down by organization.", classes="tab-desc")
                 yield OrgsTable(self._target_copies)
                 yield OrgNodeTable(self._peer_hosts)
-            with TabPane("Traffic", id="tab-traffic"):
-                yield Static("Bandwidth between every pair of nodes right now.", classes="tab-desc")
+            with TabPane("Movement", id="tab-movement"):
+                yield SourceUtilization()
+                yield TransfersTable()
                 yield TrafficHeatmap(self._peer_hosts, self._ip_map)
-            with TabPane("Latency", id="tab-latency"):
-                yield Static("Round-trip network latency between every pair of nodes.", classes="tab-desc")
                 yield LatencyHeatmap(self._peer_hosts, self._ip_map)
-            with TabPane("Heartbeats", id="tab-heartbeats"):
-                yield Static("How recently each node has heard from every other node.", classes="tab-desc")
-                yield HeartbeatMatrix(self._peer_hosts)
             with TabPane("Ingest", id="tab-ingest"):
-                yield Static("Upstream pipeline: files waiting to be packaged into sealed commits.", classes="tab-desc")
                 yield IngestOverview()
                 yield IngestNodeTable()
                 yield IngestPipeline()
             if self._fleet_source is not None:
                 with TabPane("Fleet", id="tab-fleet"):
-                    yield Static("Host-level health from scott Prometheus and tfcs status endpoints.", classes="tab-desc")
                     yield FleetTable()
+            with TabPane("Debug", id="tab-debug"):
+                yield HeartbeatMatrix(self._peer_hosts)
         yield Footer()
 
     def on_mount(self) -> None:
+        self._apply_movement_mode()
         self.action_refresh()
         self.set_interval(1.0, self._poll_next_node)
         self.set_interval(1.0, self._refresh_for_clock)
@@ -354,6 +350,7 @@ class TfcsDashboard(App):
         async def do_fleet_refresh() -> None:
             assert self._fleet_source is not None
             statuses = await self._fleet_source.refresh_prometheus()
+            await self._fleet_source.refresh_vms()
             self._fleet_status_line = self._fleet_source.status_line(
                 statuses, "checking",
             )
@@ -372,6 +369,15 @@ class TfcsDashboard(App):
                 self._update_title_bar()
 
         self.run_worker(do_fleet_refresh, exclusive=False)
+
+    def _apply_movement_mode(self) -> None:
+        """Show the selected Movement heatmap and hide the alternate view."""
+        self.query_one(TrafficHeatmap).set_class(
+            self._movement_mode != "bandwidth", "hidden",
+        )
+        self.query_one(LatencyHeatmap).set_class(
+            self._movement_mode != "latency", "hidden",
+        )
 
     _INGEST_CLASSES = frozenset({"active", "anchor"})
 
@@ -580,15 +586,17 @@ class TfcsDashboard(App):
         self.query_one(NodesTable).refresh_data(
             store.statuses, store.node_status, store.heartbeat_age, self._peer_hosts,
         )
-        self.query_one(SourceUtilization).refresh_data(store.statuses)
-        self.query_one(TransfersTable).refresh_data(store.statuses)
 
         # --- Orgs tab (Tab 3) ---
         peers = self._peer_hosts  # snapshot (property)
         self.query_one(OrgsTable).refresh_data(store.by_org)
         self.query_one(OrgNodeTable).refresh_data(store.by_org, peers)
 
-        # --- Heatmap tabs (Tabs 4-6) ---
+        # --- Movement tab (Tab 4) ---
+        self.query_one(SourceUtilization).refresh_data(store.statuses)
+        self.query_one(TransfersTable).refresh_data(store.statuses)
+
+        # --- Movement + debug heatmaps ---
         # Push current peer list + ip_map so heatmap axes include discovered nodes.
         traffic_hm = self.query_one(TrafficHeatmap)
         latency_hm = self.query_one(LatencyHeatmap)
@@ -603,6 +611,7 @@ class TfcsDashboard(App):
         traffic_hm.set_ip_map(self._ip_map)
         latency_hm.set_node_names(peers)
         latency_hm.set_ip_map(self._ip_map)
+        self._apply_movement_mode()
         heartbeat_hm.set_node_names(peers)
         traffic_hm.refresh_data(store.traffic_reports, message.updated_node)
         latency_hm.refresh_data(store.traffic_reports, message.updated_node)
@@ -640,28 +649,24 @@ class TfcsDashboard(App):
         elif active_tab == "tab-orgs":
             n_orgs = len(self._store.by_org)
             title_bar.update(f" tfcs orgs    {n_orgs} organizations")
-        elif active_tab == "tab-traffic":
+        elif active_tab == "tab-movement":
             n_reporting = len(self._store.traffic_reports)
             freshness = self._store.observational_state("traffic")
+            mode = "bandwidth" if self._movement_mode == "bandwidth" else "latency"
+            n_transfers = sum(len(s.get("claims", [])) for s in self._store.statuses)
             title_bar.update(
-                f" tfcs traffic heatmap    {n_reporting}/{len(self._peer_hosts)} nodes reporting [{freshness}]"
+                f" tfcs movement    {n_transfers} active transfers    {mode}    {n_reporting}/{len(self._peer_hosts)} reporting ({freshness})"
             )
-        elif active_tab == "tab-latency":
-            n_reporting = len(self._store.traffic_reports)
-            freshness = self._store.observational_state("traffic")
-            title_bar.update(
-                f" tfcs latency heatmap    {n_reporting}/{len(self._peer_hosts)} nodes reporting [{freshness}]"
-            )
-        elif active_tab == "tab-heartbeats":
+        elif active_tab == "tab-debug":
             n_reporting = len(self._store.heartbeat_matrix)
             freshness = self._store.observational_state("heartbeats")
             title_bar.update(
-                f" tfcs heartbeat matrix    {n_reporting}/{len(self._peer_hosts)} nodes reporting [{freshness}]"
+                f" tfcs debug    heartbeat matrix    {n_reporting}/{len(self._peer_hosts)} nodes reporting ({freshness})"
             )
         elif active_tab == "tab-ingest":
             n_ntx = len(self._store.ntx_statuses)
             freshness = self._store.observational_state("ntx")
-            title_bar.update(f" ntx ingest pipeline    {n_ntx} nodes reporting [{freshness}]")
+            title_bar.update(f" ntx ingest pipeline    {n_ntx} nodes reporting ({freshness})")
         elif active_tab == "tab-fleet":
             n_hosts = len(self._fleet_config.hosts) if self._fleet_config else 0
             title_bar.update(
@@ -683,19 +688,22 @@ class TfcsDashboard(App):
         self.query_one(TabbedContent).active = "tab-orgs"
         self._update_title_bar()
 
-    def action_tab_traffic(self) -> None:
-        """Switch to traffic tab."""
-        self.query_one(TabbedContent).active = "tab-traffic"
+    def action_tab_movement(self) -> None:
+        """Switch to movement tab."""
+        self.query_one(TabbedContent).active = "tab-movement"
         self._update_title_bar()
 
-    def action_tab_latency(self) -> None:
-        """Switch to latency tab."""
-        self.query_one(TabbedContent).active = "tab-latency"
+    def action_toggle_movement_mode(self) -> None:
+        """Toggle Movement between bandwidth and latency heatmaps."""
+        self._movement_mode = (
+            "latency" if self._movement_mode == "bandwidth" else "bandwidth"
+        )
+        self._apply_movement_mode()
         self._update_title_bar()
 
-    def action_tab_heartbeats(self) -> None:
-        """Switch to heartbeats tab."""
-        self.query_one(TabbedContent).active = "tab-heartbeats"
+    def action_tab_debug(self) -> None:
+        """Switch to debug tab."""
+        self.query_one(TabbedContent).active = "tab-debug"
         self._update_title_bar()
 
     def action_tab_ingest(self) -> None:

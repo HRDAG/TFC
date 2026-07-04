@@ -13,10 +13,14 @@ import asyncio
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
+import aiohttp
+
 from tfcs_fleet_tui.config import FleetConfig, Host
 from tfcs_fleet_tui.model import ABSENT, MISSING, Cell, FleetNode, FleetSnapshot
 from tfcs_fleet_tui.prometheus import (
     HostFreshness,
+    _instance_regex,
+    _query,
     fetch_cpu_temps,
     fetch_filesystems,
     fetch_freshness,
@@ -93,6 +97,33 @@ class FleetDataSource:
             return "unreachable"
         return "ok"
 
+    async def refresh_vms(self) -> str:
+        """Refresh configured VM scrape status for hypervisor notes."""
+        vm_instances = tuple(
+            vm for host in self.config.hosts.values() for vm in host.vm_instances
+        )
+        if not vm_instances:
+            self.last["vms"] = {}
+            return "ok"
+
+        regex = _instance_regex(list(vm_instances))
+        query = f'up{{instance=~"{regex}"}}'
+        try:
+            async with aiohttp.ClientSession() as session:
+                samples = await _query(session, self.config.prometheus_url, query, 5)
+        except Exception:
+            return "unreachable"
+
+        values: dict[str, float] = {}
+        for sample in samples:
+            instance = sample.get("metric", {}).get("instance")
+            try:
+                values[instance] = float(sample.get("value", [None, None])[1])
+            except (TypeError, ValueError):
+                pass
+        self.last["vms"] = values
+        return "ok"
+
     def build_snapshot(self, prom_status_line: str) -> FleetSnapshot:
         """Build a display snapshot from last-good cached values."""
         freshness: dict[str, HostFreshness] = self.last.get("freshness", {})
@@ -103,9 +134,11 @@ class FleetDataSource:
         nic_temps: dict[str, Cell] = self.last.get("nic_temps", {})
         filesystems: dict[str, dict[str, Cell]] = self.last.get("filesystems", {})
         pulls: dict[str, Cell] = self.last.get("pulls", {})
+        vms: dict[str, float] = self.last.get("vms", {})
 
         nodes = []
         for name in self.config.hosts:
+            host = self.config.hosts[name]
             fresh = freshness.get(name)
             fs = filesystems.get(name, {})
             cells = (
@@ -120,7 +153,24 @@ class FleetDataSource:
                 fs.get("data", MISSING),
                 pulls.get(name, MISSING),
             )
-            note = "no prom data" if all(c.status == "missing" for c in cells) else ""
+            note_parts = []
+            if host.kind != "tfcs":
+                note_parts.append(host.kind)
+            if host.vm_instances:
+                vm_parts = []
+                for instance in host.vm_instances:
+                    vm_name = instance.split(":", 1)[0].split(".", 1)[0]
+                    up_value = vms.get(instance)
+                    if up_value == 1:
+                        vm_parts.append(f"{vm_name} ok")
+                    elif up_value == 0:
+                        vm_parts.append(f"{vm_name} down")
+                    else:
+                        vm_parts.append(f"{vm_name} ?")
+                note_parts.append("VMs " + ", ".join(vm_parts))
+            if all(c.status == "missing" for c in cells):
+                note_parts.append("no prom data")
+            note = "; ".join(note_parts)
             (last_update, up, load, cpu, hdd, nvme, nic, root, data, pulls_cell) = cells
             nodes.append(FleetNode(
                 host=name,

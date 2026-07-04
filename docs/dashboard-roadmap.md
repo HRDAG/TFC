@@ -30,9 +30,10 @@
 
 ## Phase 3: collapse redundant views
 
-- Fold latency into the traffic view as a mode, detail, or secondary display; then retire the standalone `Latency` tab.
-- Keep heartbeat data initially, but demote the full matrix to a detail/debug view once node-level freshness warnings carry the operational signal.
-- Retire the heartbeat tab only after the summarized view catches the failures we care about.
+- Fold latency into the `Movement` view as a mode rather than keeping a standalone `Latency` tab.
+- Move active transfers and source utilization into `Movement`, so `Nodes` stays focused on tfcs node state rather than live data motion.
+- Keep heartbeat data, but demote the full matrix to `Debug`; surface node-level heartbeat problems in quieter summary views later.
+- Add hypervisors (`sugihara`, `fred`) to fleet health, with config-backed notes for visible VM scrape targets until a real Proxmox inventory source exists.
 
 ## Phase 4: 0.2.x tuning
 

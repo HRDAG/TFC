@@ -51,6 +51,19 @@ instance = "127.0.0.1:9100"
 tfcs_status = "scott.hrdag.net"
 mounts = { root = "/var", data = "/home" }
 
+[hosts.sugihara]
+kind = "hypervisor"
+instance = "sugihara:9100"
+mounts = { root = "/", data = "/var/lib/vz" }
+sensors = { hdd = false, nvme = false, nic = false }
+
+[hosts.fred]
+kind = "hypervisor"
+instance = "fred:9100"
+mounts = { root = "/", data = "/" }
+sensors = { hdd = false, nvme = false, nic = false }
+vm_instances = ["fredkvm.hrdag.net:9100"]
+
 [hosts.chll]
 instance = "chll.hrdag.net:9100"
 tfcs_status = "chll.hrdag.net"
