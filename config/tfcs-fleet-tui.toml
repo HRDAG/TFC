@@ -111,7 +111,7 @@ mounts = { root = "/", data = "/storage" }
 sensors = { nic = false }
 
 [hosts.lilpig]
-instance = "lilpig.hrdag.net:9100"
+instance = "lilpig:9100"
 tfcs_status = "lilpig.hrdag.net"
 mounts = { root = "/", data = "/mnt/tfcs-store" }
 sensors = { hdd = false, nic = false }
