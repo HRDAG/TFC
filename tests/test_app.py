@@ -7,10 +7,13 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 import unittest
 
 from textual.widgets import Static, TabbedContent
 
+from tfcs_fleet_tui.config import FleetConfig
+from tfcs_fleet_tui.widgets import FleetTable
 from tfcs_tui.app import NodeUpdated, TfcsDashboard
 from tfcs_tui.widgets import NodesTable, RiskBanner
 
@@ -67,6 +70,26 @@ class DashboardPilotTests(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             self.assertIn("WARN:", str(banner.render()))
             self.assertIn("stale", str(banner.render()))
+
+    async def test_fleet_tab_mounts_when_configured(self) -> None:
+        fleet_config = FleetConfig(
+            prometheus_url="http://example.invalid:9090",
+            refresh_seconds=10,
+            stale_after_seconds=120,
+            server_documentation_path=Path("."),
+            hosts={},
+            tfcs_port=8099,
+            enabled_columns=(),
+            sort="fixed",
+            temperature_unit="celsius",
+        )
+        app = PilotDashboard(["one.example"], fleet_config=fleet_config)
+        async with app.run_test():
+            app.query_one(TabbedContent).active = "tab-fleet"
+            self.assertIsNotNone(app.query_one(FleetTable))
+            app.action_tab_fleet()
+            title = app.query_one("#title-bar", Static)
+            self.assertIn("tfcs fleet health", str(title.render()))
 
 
 if __name__ == "__main__":

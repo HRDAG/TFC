@@ -1,7 +1,7 @@
 [project]
 name = "tfcs-tui"
-version = "0.1.0"
-description = "Cluster dashboard TUI for tfcs"
+version = "0.2.0"
+description = "Operations dashboard TUI for TFC"
 readme = "README.md"
 authors = [
     { name = "Patrick Ball", email = "pball@hrdag.org" }

@@ -12,3 +12,6 @@ wheels/
 
 # Personal docs (not repo content)
 docs/pb-voice-guide.md
+# Personal agent config — rendered locally, never repo content (public repo)
+CLAUDE.md
+AGENTS.md

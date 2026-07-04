@@ -8,16 +8,9 @@
 # Hardwired config for the fleet health dashboard.
 # The TUI reads this path directly; there is no CLI config override.
 
-# TEMPORARY AIRPLANE-WIFI HACK:
-# Prometheus on scott is currently bound to 127.0.0.1 (despite the systemd
-# override comment claiming otherwise — see hrdag-ansible#474). For now,
-# run a thin SSH tunnel:
-#
-#     ssh -L 9090:127.0.0.1:9090 scott
-#
-# Then the TUI can query the local forwarded port below. Once #474 lands,
-# point this at http://scott.hrdag.net:9090.
-prometheus_url = "http://127.0.0.1:9090"
+# Prometheus on scott is reachable over the tailnet, so the fleet dashboard
+# can run from any tailnet-connected machine without an SSH tunnel.
+prometheus_url = "http://scott.hrdag.net:9090"
 refresh_seconds = 10
 stale_after_seconds = 120
 # Per-host thermal thresholds (warn/crit) are loaded from server-documentation

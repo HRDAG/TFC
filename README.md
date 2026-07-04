@@ -185,16 +185,19 @@ uv run tfcs-tui -c config/tfcs-tui.toml
 ```
 
 The dashboard shows replication progress, node health, per-org breakdown,
-traffic heatmaps, and heartbeat freshness across all cluster nodes.
+traffic heatmaps, heartbeat freshness, ingest status, and fleet health across
+all cluster nodes.
 
 ---
 
 ## Fleet Health Dashboard
 
-A second TUI focused on host-level health rather than pipeline traffic:
-one row per machine, one column per signal (last-scrape, up, load, CPU /
-HDD / SSD / NVMe / NIC temperatures, root and data filesystem fullness,
+Host-level fleet health is now also available as the `Fleet` tab in
+`tfcs-tui`: one row per machine, one column per signal (last-scrape, up, load,
+CPU / HDD / SSD / NVMe / NIC temperatures, root and data filesystem fullness,
 and the count of active tfcs pulls).
+
+The focused fleet-only TUI is still available:
 
 ```bash
 uv run tfcs-fleet-tui
@@ -208,14 +211,9 @@ data column reports pool fullness aggregated across all datasets sharing
 the pool, since per-dataset `node_filesystem_*` samples under-report
 (every dataset reports the same `avail` and a near-zero used).
 
-Configured in `config/tfcs-fleet-tui.toml`. Until Prometheus on scott is
-bound to its tailnet IP (tracked in
-[hrdag-ansible#474](https://github.com/HRDAG/hrdag-ansible/issues/474)),
-this TUI needs an SSH tunnel:
-
-```bash
-ssh -L 9090:127.0.0.1:9090 scott
-```
+Configured in `config/tfcs-fleet-tui.toml`. Prometheus on `scott` is reachable
+over the tailnet at `http://scott.hrdag.net:9090`, so the TUI can run from any
+tailnet-connected machine without an SSH tunnel.
 
 ---
 

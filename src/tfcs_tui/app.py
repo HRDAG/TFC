@@ -24,6 +24,9 @@ from textual.binding import Binding
 from textual.message import Message
 from textual.widgets import Footer, Header, Static, TabbedContent, TabPane
 
+from tfcs_fleet_tui.config import FleetConfig, load_config as load_fleet_config
+from tfcs_fleet_tui.source import FleetDataSource
+from tfcs_fleet_tui.widgets import FleetTable
 from tfcs_tui.data import (
     DEFAULT_CONFIG,
     NodeDataStore,
@@ -90,6 +93,7 @@ class TfcsDashboard(App):
         Binding("5", "tab_latency", "Latency", show=False),
         Binding("6", "tab_heartbeats", "Heartbeats", show=False),
         Binding("7", "tab_ingest", "Ingest", show=False),
+        Binding("8", "tab_fleet", "Fleet", show=False),
         Binding("j", "scroll_down", "Down", show=False),
         Binding("k", "scroll_up", "Up", show=False),
     ]
@@ -126,6 +130,7 @@ class TfcsDashboard(App):
         retired_peers: list[str] | None = None,
         backoff_failures: int = 3,
         evict_failures: int = 10,
+        fleet_config: FleetConfig | None = None,
         clock=None,
     ) -> None:
         super().__init__()
@@ -141,6 +146,11 @@ class TfcsDashboard(App):
         self._host_failures: dict[str, int] = {}
         self._backoff_failures = backoff_failures
         self._evict_failures = evict_failures
+        self._fleet_config = fleet_config
+        self._fleet_source = (
+            FleetDataSource(fleet_config) if fleet_config is not None else None
+        )
+        self._fleet_status_line = ""
 
         self._http_port = http_port
         self._ntx_port = ntx_port
@@ -245,6 +255,10 @@ class TfcsDashboard(App):
                 yield IngestOverview()
                 yield IngestNodeTable()
                 yield IngestPipeline()
+            if self._fleet_source is not None:
+                with TabPane("Fleet", id="tab-fleet"):
+                    yield Static("Host-level health from scott Prometheus and tfcs status endpoints.", classes="tab-desc")
+                    yield FleetTable()
         yield Footer()
 
     def on_mount(self) -> None:
@@ -252,6 +266,8 @@ class TfcsDashboard(App):
         self.set_interval(1.0, self._poll_next_node)
         self.set_interval(1.0, self._refresh_for_clock)
         self.set_interval(120.0, self._poll_ntx_nodes)
+        if self._fleet_config is not None:
+            self.set_interval(self._fleet_config.refresh_seconds, self._poll_fleet)
 
     def _refresh_for_clock(self) -> None:
         """Render freshness transitions even when no network worker completes."""
@@ -327,6 +343,35 @@ class TfcsDashboard(App):
             self.post_message(NodeUpdated(updated_node="ntx"))
 
         self.run_worker(do_full_refresh, exclusive=False)
+        if self._fleet_source is not None:
+            self._poll_fleet()
+
+    def _poll_fleet(self) -> None:
+        """Refresh the integrated fleet-health tab."""
+        if self._fleet_source is None:
+            return
+
+        async def do_fleet_refresh() -> None:
+            assert self._fleet_source is not None
+            statuses = await self._fleet_source.refresh_prometheus()
+            self._fleet_status_line = self._fleet_source.status_line(
+                statuses, "checking",
+            )
+            self.query_one(FleetTable).refresh_data(
+                self._fleet_source.build_snapshot(self._fleet_status_line)
+            )
+
+            tfcs_status = await self._fleet_source.refresh_pulls()
+            self._fleet_status_line = self._fleet_source.status_line(
+                statuses, tfcs_status,
+            )
+            self.query_one(FleetTable).update_pulls(
+                self._fleet_source.last.get("pulls", {})
+            )
+            if self.query_one(TabbedContent).active == "tab-fleet":
+                self._update_title_bar()
+
+        self.run_worker(do_fleet_refresh, exclusive=False)
 
     _INGEST_CLASSES = frozenset({"active", "anchor"})
 
@@ -617,6 +662,11 @@ class TfcsDashboard(App):
             n_ntx = len(self._store.ntx_statuses)
             freshness = self._store.observational_state("ntx")
             title_bar.update(f" ntx ingest pipeline    {n_ntx} nodes reporting [{freshness}]")
+        elif active_tab == "tab-fleet":
+            n_hosts = len(self._fleet_config.hosts) if self._fleet_config else 0
+            title_bar.update(
+                f" tfcs fleet health    {n_hosts} hosts    {self._fleet_status_line}"
+            )
 
     def action_tab_replication(self) -> None:
         """Switch to replication tab."""
@@ -651,6 +701,13 @@ class TfcsDashboard(App):
     def action_tab_ingest(self) -> None:
         """Switch to ingest tab."""
         self.query_one(TabbedContent).active = "tab-ingest"
+        self._update_title_bar()
+
+    def action_tab_fleet(self) -> None:
+        """Switch to fleet tab."""
+        if self._fleet_source is None:
+            return
+        self.query_one(TabbedContent).active = "tab-fleet"
         self._update_title_bar()
 
     def action_scroll_down(self) -> None:
@@ -692,6 +749,7 @@ def main() -> None:
         retired_peers=cfg["retired_peers"],
         backoff_failures=cfg["backoff_failures"],
         evict_failures=cfg["evict_failures"],
+        fleet_config=load_fleet_config(),
     )
 
     app.run()
