@@ -9,6 +9,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.widgets import Footer, Header, Static
@@ -73,8 +75,10 @@ class FleetDashboard(App):
         self.run_worker(self._refresh, exclusive=True)
 
     async def _refresh(self) -> None:
-        statuses = await self._source.refresh_prometheus()
-        await self._source.refresh_vms()
+        statuses, _ = await asyncio.gather(
+            self._source.refresh_prometheus(),
+            self._source.refresh_oob(),
+        )
 
         self._render_snapshot(self._build_snapshot(
             prom_status_line=self._source.status_line(statuses, "checking"),

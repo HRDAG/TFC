@@ -191,10 +191,7 @@ movement, ingest status, fleet health, and debug matrices across the cluster.
 
 ## Fleet Health Dashboard
 
-Host-level fleet health is now also available as the `Fleet` tab in
-`tfcs-tui`: one row per machine, one column per signal (last-scrape, up, load,
-CPU / HDD / SSD / NVMe / NIC temperatures, root and data filesystem fullness,
-the count of active tfcs pulls, and compact notes for hypervisor/VM visibility).
+Host-level fleet health is now also available as the `Fleet` tab in `tfcs-tui`: one row per machine, one column per signal (last-scrape, up, load, compact current temperatures, root and data filesystem fullness, the count of active tfcs pulls, and OOB method/status). PiKVM OOB status uses Prometheus scrape reachability; IPMI/iLO entries are display-only unless a VPN-free check exists.
 
 The focused fleet-only TUI is still available:
 

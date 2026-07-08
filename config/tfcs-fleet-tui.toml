@@ -36,39 +36,43 @@ temperature_unit = "celsius"
 
 [columns]
 enabled = [
-    "host", "last", "up", "load",
-    "cpu_temp", "hdd_temp", "ssd_temp", "nvme_temp", "nic",
-    "root", "data", "tfcs_pulls", "note",
+    "host", "last", "up", "load", "temp",
+    "root", "data", "tfcs_pulls", "oob", "note",
 ]
 
 # One block per host. `sensors` defaults to all true; declare false to mark a
 # physical absence (no spinning HDD, no NIC hwmon chip, etc.) so cells render
 # as `--` rather than `?`. `tfcs_status` is the FQDN to poll on tfcs.port for
-# pull activity; omit if the host doesn't run tfcs.
+# pull activity; omit if the host doesn't run tfcs. `oob.kind` is a display
+# note. `oob.instances` are Prometheus scrape labels for OOB devices whose
+# reachability can be checked without a VPN, currently PiKVM node_exporters.
 
 [hosts.scott]
 instance = "127.0.0.1:9100"
 tfcs_status = "scott.hrdag.net"
 mounts = { root = "/var", data = "/home" }
+oob = { kind = "ipmi" }
 
 [hosts.sugihara]
 kind = "hypervisor"
-instance = "sugihara:9100"
+instance = "sugihara.hrdag.net:9100"
 mounts = { root = "/", data = "/var/lib/vz" }
 sensors = { hdd = false, nvme = false, nic = false }
+oob = { kind = "iLO5" }
 
 [hosts.fred]
 kind = "hypervisor"
-instance = "fred:9100"
+instance = "fred.hrdag.net:9100"
 mounts = { root = "/", data = "/" }
 sensors = { hdd = false, nvme = false, nic = false }
-vm_instances = ["fredkvm.hrdag.net:9100"]
+oob = { kind = "PiKVM", instances = ["fredkvm.hrdag.net:9100"] }
 
 [hosts.chll]
 instance = "chll.hrdag.net:9100"
 tfcs_status = "chll.hrdag.net"
 mounts = { root = "/home", data = "/storage" }
 sensors = { nic = false }
+oob = { kind = "PiKVM", instances = ["chllkvm.hrdag.net:9100"] }
 
 [hosts.pihost]
 instance = "pihost.hrdag.net:9100"
@@ -91,40 +95,48 @@ mounts = { root = "/", data = "/data/tfcs" }
 instance = "lizo.hrdag.net:9100"
 tfcs_status = "lizo.hrdag.net"
 mounts = { root = "/", data = "/storage" }
+oob = { kind = "PiKVM", instances = ["lizokvm.hrdag.net:9100"] }
 
 [hosts.ben]
 instance = "ben.hrdag.net:9100"
 tfcs_status = "ben.hrdag.net"
 mounts = { root = "/", data = "/storage/orgs" }
+oob = { kind = "ipmi" }
+note = "NIC heat ok"
 
 [hosts.ida]
 instance = "ida.hrdag.net:9100"
 tfcs_status = "ida.hrdag.net"
 mounts = { root = "/", data = "/storage" }
+oob = { kind = "PiKVM", instances = ["idakvm.hrdag.net:9100"] }
 
 [hosts.ant]
 instance = "ant.hrdag.net:9100"
 tfcs_status = "ant.hrdag.net"
 mounts = { root = "/", data = "/storage" }
+oob = { kind = "PiKVM", instances = ["antkvm.hrdag.net:9100"] }
 
 [hosts.nas]
 instance = "nas.hrdag.net:9100"
 mounts = { root = "/", data = "/home" }
 sensors = { nic = false }
+oob = { kind = "ipmi" }
 
 [hosts.kj]
 instance = "kj.hrdag.net:9100"
 mounts = { root = "/", data = "/vol" }
 sensors = { hdd = false }
+oob = { kind = "ipmi" }
 
 [hosts.dwight]
 instance = "dwight.hrdag.net:9100"
 tfcs_status = "dwight.hrdag.net"
 mounts = { root = "/", data = "/storage" }
 sensors = { nic = false }
+oob = { kind = "PiKVM", instances = ["dwightkvm.hrdag.net:9100"] }
 
 [hosts.lilpig]
-instance = "lilpig:9100"
+instance = "lilpig.hrdag.net:9100"
 tfcs_status = "lilpig.hrdag.net"
 mounts = { root = "/", data = "/mnt/tfcs-store" }
 sensors = { hdd = false, nic = false }

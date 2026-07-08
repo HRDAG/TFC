@@ -25,6 +25,7 @@ from tfcs_fleet_tui.prometheus import (
     fetch_filesystems,
     fetch_freshness,
     fetch_hdd_temps,
+    fetch_known_instances,
     fetch_load,
     fetch_nic_temps,
     fetch_nvme_temps,
@@ -53,6 +54,7 @@ PROM_FETCHES: tuple[MetricFetch, ...] = (
     MetricFetch("nvme",      "nvme_temps",  lambda u, h, c: fetch_nvme_temps(u, h)),
     MetricFetch("nic",       "nic_temps",   lambda u, h, c: fetch_nic_temps(u, h)),
     MetricFetch("fs",        "filesystems", lambda u, h, c: fetch_filesystems(u, h)),
+    MetricFetch("labels",    "known_instances", lambda u, h, c: fetch_known_instances(u, h)),
 )
 PROM_STATUS_KEYS: tuple[str, ...] = tuple(f.status_key for f in PROM_FETCHES)
 
@@ -97,16 +99,18 @@ class FleetDataSource:
             return "unreachable"
         return "ok"
 
-    async def refresh_vms(self) -> str:
-        """Refresh configured VM scrape status for hypervisor notes."""
-        vm_instances = tuple(
-            vm for host in self.config.hosts.values() for vm in host.vm_instances
+    async def refresh_oob(self) -> str:
+        """Refresh configured OOB scrape status for host notes."""
+        oob_instances = tuple(
+            instance
+            for host in self.config.hosts.values()
+            for instance in host.oob_instances
         )
-        if not vm_instances:
-            self.last["vms"] = {}
+        if not oob_instances:
+            self.last["oob"] = {}
             return "ok"
 
-        regex = _instance_regex(list(vm_instances))
+        regex = _instance_regex(list(oob_instances))
         query = f'up{{instance=~"{regex}"}}'
         try:
             async with aiohttp.ClientSession() as session:
@@ -121,8 +125,37 @@ class FleetDataSource:
                 values[instance] = float(sample.get("value", [None, None])[1])
             except (TypeError, ValueError):
                 pass
-        self.last["vms"] = values
+        self.last["oob"] = values
         return "ok"
+
+    @staticmethod
+    def _oob_cell(host: Host, oob: dict[str, float]) -> Cell:
+        """Build the OOB display cell.
+
+        PiKVM entries with scrape labels carry live reachability. VPN-gated
+        IPMI/iLO entries are display-only and intentionally remain plain.
+        """
+        if not host.oob_kind:
+            return ABSENT
+        label = host.oob_kind
+        if not host.oob_instances:
+            return Cell.from_str(label)
+
+        states = []
+        for instance in host.oob_instances:
+            up_value = oob.get(instance)
+            if up_value == 1:
+                states.append("ok")
+            elif up_value == 0:
+                states.append("down")
+            else:
+                states.append("?")
+
+        if all(state == "ok" for state in states):
+            return Cell.of(1, label, status="safe")
+        if any(state == "down" for state in states):
+            return Cell.of(0, label, status="crit")
+        return Cell.of(None, f"{label}?", status="missing")
 
     def build_snapshot(self, prom_status_line: str) -> FleetSnapshot:
         """Build a display snapshot from last-good cached values."""
@@ -134,7 +167,8 @@ class FleetDataSource:
         nic_temps: dict[str, Cell] = self.last.get("nic_temps", {})
         filesystems: dict[str, dict[str, Cell]] = self.last.get("filesystems", {})
         pulls: dict[str, Cell] = self.last.get("pulls", {})
-        vms: dict[str, float] = self.last.get("vms", {})
+        oob: dict[str, float] = self.last.get("oob", {})
+        known_instances: set[str] = self.last.get("known_instances", set())
 
         nodes = []
         for name in self.config.hosts:
@@ -156,21 +190,15 @@ class FleetDataSource:
             note_parts = []
             if host.kind != "tfcs":
                 note_parts.append(host.kind)
-            if host.vm_instances:
-                vm_parts = []
-                for instance in host.vm_instances:
-                    vm_name = instance.split(":", 1)[0].split(".", 1)[0]
-                    up_value = vms.get(instance)
-                    if up_value == 1:
-                        vm_parts.append(f"{vm_name} ok")
-                    elif up_value == 0:
-                        vm_parts.append(f"{vm_name} down")
-                    else:
-                        vm_parts.append(f"{vm_name} ?")
-                note_parts.append("VMs " + ", ".join(vm_parts))
-            if all(c.status == "missing" for c in cells):
-                note_parts.append("no prom data")
+            if host.note:
+                note_parts.append(host.note)
+            if all(c.status in ("missing", "absent") for c in cells):
+                if known_instances and host.instance not in known_instances:
+                    note_parts.append("bad instance label")
+                else:
+                    note_parts.append("no prom data")
             note = "; ".join(note_parts)
+            oob_cell = self._oob_cell(host, oob)
             (last_update, up, load, cpu, hdd, nvme, nic, root, data, pulls_cell) = cells
             nodes.append(FleetNode(
                 host=name,
@@ -179,12 +207,12 @@ class FleetDataSource:
                 load=load,
                 cpu_temp=cpu,
                 hdd_temp=hdd,
-                ssd_temp=ABSENT,
                 nvme_temp=nvme,
                 nic=nic,
                 root=root,
                 data=data,
                 pulls=pulls_cell,
+                oob=oob_cell,
                 note=note,
             ))
         return FleetSnapshot(

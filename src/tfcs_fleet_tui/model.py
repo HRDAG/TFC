@@ -68,12 +68,12 @@ class FleetNode:
     load: Cell = ABSENT
     cpu_temp: Cell = ABSENT
     hdd_temp: Cell = ABSENT
-    ssd_temp: Cell = ABSENT
     nvme_temp: Cell = ABSENT
     nic: Cell = ABSENT
     root: Cell = ABSENT
     data: Cell = ABSENT
     pulls: Cell = ABSENT
+    oob: Cell = ABSENT
     note: str = ""
 
 

@@ -31,19 +31,40 @@ def _styled(cell: Cell) -> Text | str:
     return Text(cell.value, style=style)
 
 
-_METRIC_COLUMNS: tuple[tuple[str, str], ...] = (
+def _compact_temp_cell(node) -> Text:
+    text = Text()
+    for label, attr in (
+        ("c", "cpu_temp"),
+        ("h", "hdd_temp"),
+        ("n", "nvme_temp"),
+        ("i", "nic"),
+    ):
+        cell = getattr(node, attr)
+        value = "--" if cell.status == "absent" else "?" if cell.status == "missing" else f"{cell.raw:.0f}"
+        style = _STATUS_STYLE.get(cell.status, "")
+        if text:
+            text.append(" ")
+        text.append(label, style="dim")
+        text.append(value, style=style)
+    return text
+
+
+_ROW_COLUMNS: tuple[tuple[str, str | None], ...] = (
     ("last", "last_update"),
     ("up", "up"),
     ("load", "load"),
-    ("cpu", "cpu_temp"),
-    ("hdd", "hdd_temp"),
-    ("ssd", "ssd_temp"),
-    ("nvme", "nvme_temp"),
-    ("nic", "nic"),
+    ("temp", None),
     ("root", "root"),
     ("data", "data"),
     ("pulls", "pulls"),
+    ("oob", "oob"),
 )
+
+
+def _row_cell(node, col_key: str, attr: str | None) -> Text | str:
+    if col_key == "temp":
+        return _compact_temp_cell(node)
+    return _styled(getattr(node, attr))
 
 
 class FleetTable(DataTable):
@@ -65,22 +86,19 @@ class FleetTable(DataTable):
         self.add_column("Last", width=6, key="last")
         self.add_column("Up", width=6, key="up")
         self.add_column("Load", width=8, key="load")
-        self.add_column("CPU", width=6, key="cpu")
-        self.add_column("HDD", width=6, key="hdd")
-        self.add_column("SSD", width=6, key="ssd")
-        self.add_column("NVMe", width=6, key="nvme")
-        self.add_column("NIC", width=5, key="nic")
+        self.add_column("Temp", width=16, key="temp")
         self.add_column("Root", width=6, key="root")
         self.add_column("Data", width=6, key="data")
         self.add_column("Pulls", width=8, key="pulls")
-        self.add_column("Note", width=20, key="note")
+        self.add_column("OOB", width=6, key="oob")
+        self.add_column("Note", width=16, key="note")
         self.cursor_type = "none"
 
         for col_key in self.columns:
             self.columns[col_key].label_align = ("center", "middle")
 
         for col_key in (
-            "last", "load", "cpu", "hdd", "ssd", "nvme", "root", "data", "pulls"
+            "last", "load", "root", "data", "pulls"
         ):
             self.columns[col_key].content_align = ("right", "middle")
 
@@ -90,8 +108,8 @@ class FleetTable(DataTable):
                 self._add_node_row(node)
                 continue
             self.update_cell(node.host, "host", node.host)
-            for col_key, attr in _METRIC_COLUMNS:
-                self.update_cell(node.host, col_key, _styled(getattr(node, attr)))
+            for col_key, attr in _ROW_COLUMNS:
+                self.update_cell(node.host, col_key, _row_cell(node, col_key, attr))
             self.update_cell(node.host, "note", node.note)
 
     def update_pulls(self, pulls: dict[str, Cell]) -> None:
@@ -104,7 +122,7 @@ class FleetTable(DataTable):
         """Add a fully populated row for one host."""
         self.add_row(
             node.host,
-            *(_styled(getattr(node, attr)) for _, attr in _METRIC_COLUMNS),
+            *(_row_cell(node, col_key, attr) for col_key, attr in _ROW_COLUMNS),
             node.note,
             key=node.host,
         )

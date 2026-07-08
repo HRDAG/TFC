@@ -21,7 +21,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # Sensors a host may or may not have. New sensors get added here, not as
 # separate exclusion lists elsewhere.
-SENSOR_KEYS: tuple[str, ...] = ("cpu", "hdd", "ssd", "nvme", "nic")
+SENSOR_KEYS: tuple[str, ...] = ("cpu", "hdd", "nvme", "nic")
 
 
 @dataclass(frozen=True)
@@ -33,8 +33,9 @@ class Host:
     does not run tfcs. `mounts` maps display column ("root", "data") to the
     filesystem mountpoint to query. `sensors[key]` is True when the host is
     expected to expose that sensor; False marks a physical absence so cells
-    render as `--` (absent) rather than `?` (missing). `thresholds[metric]`
-    carries (warn, crit) numeric boundaries derived from
+    render as `--` (absent) rather than `?` (missing). `oob_kind` and
+    `oob_instances` render compact OOB notes and optional scrape reachability.
+    `thresholds[metric]` carries (warn, crit) numeric boundaries derived from
     server-documentation; absent for metrics where the underlying hardware
     isn't documented yet.
     """
@@ -45,7 +46,9 @@ class Host:
     tfcs_status: str | None = None
     mounts: dict[str, str] = field(default_factory=dict)
     sensors: dict[str, bool] = field(default_factory=dict)
-    vm_instances: tuple[str, ...] = ()
+    oob_kind: str | None = None
+    oob_instances: tuple[str, ...] = ()
+    note: str = ""
     thresholds: dict[str, Thresholds] = field(default_factory=dict)
 
     def has(self, sensor: str) -> bool:
@@ -76,6 +79,10 @@ def _parse_host(name: str, raw: dict) -> Host:
     tfcs_status = raw.get("tfcs_status")
     if tfcs_status is False:
         tfcs_status = None
+    oob = raw.get("oob", {})
+    if not isinstance(oob, dict):
+        oob = {}
+    oob_kind = oob.get("kind")
     return Host(
         name=name,
         instance=str(raw["instance"]),
@@ -83,7 +90,9 @@ def _parse_host(name: str, raw: dict) -> Host:
         tfcs_status=tfcs_status,
         mounts=dict(raw.get("mounts", {})),
         sensors=sensors,
-        vm_instances=tuple(str(v) for v in raw.get("vm_instances", ())),
+        oob_kind=str(oob_kind) if oob_kind else None,
+        oob_instances=tuple(str(v) for v in oob.get("instances", ())),
+        note=str(raw.get("note", "")),
     )
 
 
@@ -123,7 +132,9 @@ def load_config() -> FleetConfig:
                 tfcs_status=host.tfcs_status,
                 mounts=host.mounts,
                 sensors=host.sensors,
-                vm_instances=host.vm_instances,
+                oob_kind=host.oob_kind,
+                oob_instances=host.oob_instances,
+                note=host.note,
                 thresholds=per_host_thresholds[name],
             )
         hosts[name] = host

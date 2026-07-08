@@ -88,6 +88,29 @@ async def _query(
     return list(data.get("data", {}).get("result", []))
 
 
+async def fetch_known_instances(
+    prometheus_url: str,
+    hosts: dict[str, Host],
+    timeout_seconds: int = 5,
+) -> set[str]:
+    """Fetch every instance label Prometheus currently scrapes.
+
+    Used to distinguish a misconfigured ``instance`` value (label never
+    appears, host permanently blank) from a real outage (label matches,
+    scrape just failed) -- both otherwise render as identical "missing"
+    cells.
+    """
+    if not hosts:
+        return set()
+    async with aiohttp.ClientSession() as session:
+        samples = await _query(session, prometheus_url, "up", timeout_seconds)
+    return {
+        instance
+        for sample in samples
+        if (instance := sample.get("metric", {}).get("instance"))
+    }
+
+
 def _sample_values_by_host(
     samples: list[dict], instance_to_host: dict[str, str],
 ) -> dict[str, float]:

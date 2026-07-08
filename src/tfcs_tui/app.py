@@ -241,10 +241,11 @@ class TfcsDashboard(App):
                 yield OrgsTable(self._target_copies)
                 yield OrgNodeTable(self._peer_hosts)
             with TabPane("Movement", id="tab-movement"):
-                yield SourceUtilization()
-                yield TransfersTable()
+                yield Static("", id="movement-mode")
                 yield TrafficHeatmap(self._peer_hosts, self._ip_map)
                 yield LatencyHeatmap(self._peer_hosts, self._ip_map)
+                yield SourceUtilization()
+                yield TransfersTable()
             with TabPane("Ingest", id="tab-ingest"):
                 yield IngestOverview()
                 yield IngestNodeTable()
@@ -349,8 +350,10 @@ class TfcsDashboard(App):
 
         async def do_fleet_refresh() -> None:
             assert self._fleet_source is not None
-            statuses = await self._fleet_source.refresh_prometheus()
-            await self._fleet_source.refresh_vms()
+            statuses, _ = await asyncio.gather(
+                self._fleet_source.refresh_prometheus(),
+                self._fleet_source.refresh_oob(),
+            )
             self._fleet_status_line = self._fleet_source.status_line(
                 statuses, "checking",
             )
@@ -377,6 +380,9 @@ class TfcsDashboard(App):
         )
         self.query_one(LatencyHeatmap).set_class(
             self._movement_mode != "latency", "hidden",
+        )
+        self.query_one("#movement-mode", Static).update(
+            f" mode: {self._movement_mode}"
         )
 
     _INGEST_CLASSES = frozenset({"active", "anchor"})
