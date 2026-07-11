@@ -335,15 +335,21 @@ async def fetch_nvme_temps(
     hosts: dict[str, Host],
     timeout_seconds: int = 5,
 ) -> dict[str, Cell]:
-    """Fetch max NVMe temperature per configured host."""
+    """Fetch max NVMe temperature per configured host.
+
+    Prefer smartctl_exporter, which covers devices that node_exporter may not
+    expose. Fall back to node_exporter's NVMe hwmon chips for hosts such as
+    hypervisors where node_exporter is the only deployed exporter.
+    """
     regex = _hosts_regex(hosts)
-    query = (
+    queries = (
         'max by (instance) ('
         f'smartctl_device_temperature{{instance=~"{regex}",device=~"nvme.*",temperature_type="current"}}'
-        ')'
+        ')',
+        f'max by (instance) (node_hwmon_temp_celsius{{instance=~"{regex}",chip=~"nvme_nvme.*"}})',
     )
     return await _fetch_hwmon_temps(
-        prometheus_url, hosts, "nvme", "nvme_temp", (query,), timeout_seconds,
+        prometheus_url, hosts, "nvme", "nvme_temp", queries, timeout_seconds,
     )
 
 

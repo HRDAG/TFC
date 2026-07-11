@@ -64,7 +64,7 @@ oob = { kind = "iLO5" }
 kind = "hypervisor"
 instance = "fred.hrdag.net:9100"
 mounts = { root = "/", data = "/" }
-sensors = { hdd = false, nvme = false, nic = false }
+sensors = { hdd = false, nic = false }
 oob = { kind = "PiKVM", instances = ["fredkvm.hrdag.net:9100"] }
 
 [hosts.chll]
@@ -116,8 +116,8 @@ tfcs_status = "ant.hrdag.net"
 mounts = { root = "/", data = "/storage" }
 oob = { kind = "PiKVM", instances = ["antkvm.hrdag.net:9100"] }
 
-[hosts.nas]
-instance = "nas.hrdag.net:9100"
+[hosts.herb]
+instance = "herb.hrdag.net:9100"
 mounts = { root = "/", data = "/home" }
 sensors = { nic = false }
 oob = { kind = "ipmi" }
