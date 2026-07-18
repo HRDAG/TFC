@@ -48,8 +48,8 @@ enabled = [
 # reachability can be checked without a VPN, currently PiKVM node_exporters.
 
 [hosts.scott]
+kind = "fleet-only"
 instance = "127.0.0.1:9100"
-tfcs_status = "scott.hrdag.net"
 mounts = { root = "/var", data = "/home" }
 oob = { kind = "ipmi" }
 
@@ -124,6 +124,7 @@ oob = { kind = "PiKVM", instances = ["antkvm.hrdag.net:9100"] }
 
 [hosts.herb]
 instance = "herb.hrdag.net:9100"
+tfcs_status = "herb.hrdag.net"
 mounts = { root = "/", data = "/home" }
 sensors = { nic = false }
 oob = { kind = "ipmi" }
