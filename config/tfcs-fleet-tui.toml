@@ -74,9 +74,15 @@ mounts = { root = "/home", data = "/storage" }
 sensors = { nic = false }
 oob = { kind = "PiKVM", instances = ["chllkvm.hrdag.net:9100"] }
 
+[hosts.lanada]
+instance = "lanada.hrdag.net:9100"
+tfcs_status = "lanada.hrdag.net"
+mounts = { root = "/", data = "/mnt/tfcs-store" }
+sensors = { nic = false }
+
 [hosts.pihost]
+kind = "fleet-only"
 instance = "pihost.hrdag.net:9100"
-tfcs_status = "pihost.hrdag.net"
 mounts = { root = "/", data = "/" }
 sensors = { nic = false }
 

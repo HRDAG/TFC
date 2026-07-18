@@ -93,7 +93,8 @@ class FleetDataSource:
                 tfcs_fqdns, self.config.tfcs_port,
             )
             self.last["pulls"] = {
-                name: pull_cell(pull_summaries.get(name)) for name in hosts
+                name: pull_cell(pull_summaries.get(name)) if host.tfcs_status else ABSENT
+                for name, host in hosts.items()
             }
         except Exception:
             return "unreachable"
